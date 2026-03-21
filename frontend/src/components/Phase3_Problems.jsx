@@ -1,216 +1,420 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react'
+import '../styles/phases.css'
 
-const TAGS = [
+const PROBLEM_TAGS = [
   'Repetitive', 'Time-consuming', 'Manual', 'Error-prone',
   'Slow decision-making', 'Data scattered', 'No visibility',
-  'Customer-facing', 'Compliance risk'
-];
+  'Customer-facing', 'Compliance risk',
+]
 
-const SEV_COLORS = { 1: '#5a6a7a', 2: '#f0a830', 3: '#f0a830', 4: '#ff7a50', 5: '#f04848' };
-const SEV_LABELS = { 1: 'Minor', 2: 'Low', 3: 'Medium', 4: 'High', 5: 'Critical' };
+const SEVERITY_LABELS = {
+  1: { label: 'Minor inconvenience', color: 'var(--text-3)' },
+  2: { label: 'Regular friction',    color: 'var(--amber)' },
+  3: { label: 'Significant impact',  color: 'var(--amber)' },
+  4: { label: 'Major bottleneck',    color: '#e07040' },
+  5: { label: 'Critical blocker',    color: 'var(--red)' },
+}
 
-const STEPS = [
-  { num: 1, name: 'Submit Problems' },
-  { num: 2, name: 'Problem Clusters' },
-];
+// Role-specific workflow placeholder text
+const WORKFLOW_PLACEHOLDERS = {
+  'CEO / Founder':           'e.g. Every board meeting I ask 3 different teams for the same KPIs. Each team pulls data differently, we spend 2 days reconciling numbers before I can present...',
+  'CTO / Technology Leader': 'e.g. When a bug reaches production, I manually check 4 dashboards, cross-reference logs in two systems, then post a Slack update every 30 minutes until resolved...',
+  'COO / Operations':        'e.g. Each week I export a report from the ERP, paste it into Excel, manually add columns from a second system, then format it into the ops review template...',
+  'Product Manager':         'e.g. For each feature release I create a Jira ticket, write a Confluence spec, copy key details into a Slack channel, then re-enter delivery dates into a roadmap spreadsheet...',
+  'Data / AI Engineer':      'e.g. Every morning I check 3 pipeline dashboards, manually re-run failed jobs, document the failure in a Google Sheet, then notify stakeholders via email...',
+  'Business Analyst':        'e.g. Monthly reporting: I download 5 CSV exports, open each in Excel, clean the data, use VLOOKUP to join them, then manually build the charts in PowerPoint...',
+  'Department Head':         'e.g. To approve a purchase I receive an email, check the budget spreadsheet, reply with approval, then separately notify finance by filling in a web form...',
+  'Consultant':              'e.g. For every client engagement I copy-paste the scope template, manually update all company-specific references, then recreate the same slide structure from scratch...',
+  'Other':                   'e.g. Every Monday I open 3 spreadsheets, copy last week\'s numbers into a master sheet, manually calculate the totals, then paste them into a slide for the 9am review...',
+}
 
-const emptyProblem = () => ({
-  id: Date.now(), text: '', tags: [], severity: 3, department: ''
-});
+const DEFAULT_PLACEHOLDER = WORKFLOW_PLACEHOLDERS['Other']
 
-function Phase3_Problems({ api, getWsBase, session, participant, mode, onComplete }) {
-  const [step, setStep] = useState(1);
-  const [problems, setProblems] = useState([emptyProblem()]);
-  const [clusters, setClusters] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [liveCount, setLiveCount] = useState(0);
+export default function Phase3_Problems({ api, getWsBase, session, participant, onComplete }) {
+  const role = participant?.role || 'Other'
+  const workflowPlaceholder = WORKFLOW_PLACEHOLDERS[role] || DEFAULT_PLACEHOLDER
 
+  const [step,         setStep]         = useState('submit')
+  const [problems,     setProblems]     = useState([
+    { id: 1, text: '', tags: [], severity: 3,
+      department: participant?.department || '',
+      workflow_description: '' },
+  ])
+  const [liveProblems, setLiveProblems] = useState([])
+  const [clusters,     setClusters]    = useState(null)
+  const [submitting,   setSubmitting]  = useState(false)
+  const [error,        setError]       = useState(null)
+  const [liveCount,    setLiveCount]   = useState(1)
+  const wsRef = useRef(null)
+
+  // WebSocket
   useEffect(() => {
-    if (step === 2 && session) {
-      const ws = new WebSocket(`${getWsBase()}/ws/${session.code}`);
-      ws.onmessage = (e) => {
-        const msg = JSON.parse(e.data);
-        if (msg.type === 'problem_clusters') setClusters(msg.data);
-        if (msg.type === 'problems_count') setLiveCount(msg.count);
-      };
-      return () => ws.close();
+    if (!session?.code) return
+    const ws = new WebSocket(
+      `${getWsBase()}/ws/${session.code}?participant_id=${participant?.id || 'host'}`
+    )
+    wsRef.current = ws
+    ws.onmessage = (e) => {
+      try {
+        const msg = JSON.parse(e.data)
+        if (msg.type === 'problems_count')   setLiveCount(msg.count)
+        if (msg.type === 'live_problems')    setLiveProblems(msg.problems)
+        if (msg.type === 'problem_clusters') setClusters(msg.data)
+      } catch {}
     }
-  }, [step, session]);
+    ws.onerror = () => {}
+    return () => ws.close()
+  }, [session?.code])
 
-  const updateProblem = (id, field, value) => {
-    setProblems(problems.map(p => p.id === id ? { ...p, [field]: value } : p));
-  };
+  const updateProblem = (id, key, val) =>
+    setProblems(ps => ps.map(p => p.id === id ? { ...p, [key]: val } : p))
 
-  const toggleTag = (id, tag) => {
-    setProblems(problems.map(p => {
-      if (p.id !== id) return p;
-      return { ...p, tags: p.tags.includes(tag) ? p.tags.filter(t => t !== tag) : [...p.tags, tag] };
-    }));
-  };
+  const toggleTag = (id, tag) =>
+    setProblems(ps => ps.map(p => {
+      if (p.id !== id) return p
+      const tags = p.tags.includes(tag) ? p.tags.filter(t => t !== tag) : [...p.tags, tag]
+      return { ...p, tags }
+    }))
 
-  const removeProblem = (id) => setProblems(problems.filter(p => p.id !== id));
-  const addProblem = () => { if (problems.length < 5) setProblems([...problems, emptyProblem()]); };
+  const addProblem = () => {
+    if (problems.length >= 5) return
+    setProblems(ps => [...ps, {
+      id: Date.now(), text: '', tags: [], severity: 3,
+      department: participant?.department || '',
+      workflow_description: '',
+    }])
+  }
 
-  const validCount = problems.filter(p => p.text.length > 10).length;
+  const removeProblem = (id) =>
+    setProblems(ps => ps.filter(p => p.id !== id))
+
+  const validProblems = problems.filter(p => p.text.trim().length > 10)
 
   const handleSubmit = async () => {
-    setLoading(true);
+    if (validProblems.length === 0) return
+    setSubmitting(true)
+    setError(null)
     try {
-      const data = await api('/phase/problems', {
+      const result = await api('/phase/problems', {
         method: 'POST',
         body: JSON.stringify({
-          session_code: session.code,
+          session_code:   session.code,
           participant_id: participant?.id,
-          problems: problems.filter(p => p.text.length > 10)
-        })
-      });
-      setClusters(data.clusters || []);
-      setStep(2);
-    } catch { alert('Error submitting problems.'); }
-    finally { setLoading(false); }
-  };
+          problems: validProblems.map(({ id, ...rest }) => rest),
+        }),
+      })
+      setClusters(result.clusters)
+      setLiveProblems(result.all_problems || [])
+      setStep('clusters')
+    } catch {
+      setError('Could not submit. Is the backend running?')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  // How many problems have a workflow filled in
+  const workflowCount = validProblems.filter(p => p.workflow_description?.trim().length > 10).length
 
   return (
     <div className="phase-shell fade-up">
-      <header className="phase-header">
-        <div className="phase-logo"><span className="logo-icon">◈</span> AI Copilot</div>
+
+      <div className="phase-header">
+        <div className="phase-logo">◈ AI Copilot</div>
         <div className="phase-indicator">
-          <div className="phase-ind-dot"></div>
-          <span className="phase-ind-label">Phase 3 — Problems</span>
+          <div className="phase-dot pulse" />
+          <span className="phase-label">Phase 3 — Problem Discovery</span>
         </div>
-      </header>
+      </div>
 
       <div className="step-track">
-        {STEPS.map(s => (
-          <div key={s.num} className={`step-item ${step === s.num ? 'active' : ''} ${step > s.num ? 'done' : ''}`}>
-            <div className="step-dot">{step > s.num ? '✓' : s.num}</div>
-            <span className="step-name">{s.name}</span>
-          </div>
-        ))}
+        {['Submit Problems', 'Problem Clusters'].map((s, i) => {
+          const idx = ['submit', 'clusters'].indexOf(step)
+          return (
+            <div key={s} className={`step-item ${i <= idx ? 'active' : ''} ${i < idx ? 'done' : ''}`}>
+              <div className="step-dot">{i < idx ? '✓' : i + 1}</div>
+              <span className="step-name">{s}</span>
+            </div>
+          )
+        })}
       </div>
 
       <div className="live-bar">
-        <div className="live-dot pulse"></div>
-        <span className="live-text">{liveCount || problems.length} problems submitted</span>
+        <span className="live-dot pulse" />
+        <span className="live-text">{liveCount} participant{liveCount !== 1 ? 's' : ''} submitting problems</span>
       </div>
 
-      <main className="phase-body">
-        {step === 1 && (
+      <div className="phase-body">
+
+        {/* ── STEP 1: Submit ── */}
+        {step === 'submit' && (
           <div className="fade-up">
             <div className="phase-title-block">
-              <h1 className="phase-title">Problem Discovery</h1>
-              <p className="phase-desc">What slows you down in your own work? (Specific and tactical pain points)</p>
+              <p className="badge badge-accent">Problem Identification</p>
+              <h2 className="phase-title">What slows your<br />team down the most?</h2>
+              <p className="phase-desc">
+                Describe up to 5 problems. For each one, walk us through
+                your current workflow — this helps the AI identify exactly
+                which steps can be automated.
+              </p>
             </div>
 
             <div className="problems-list">
-              {problems.map((p, idx) => (
-                <div key={p.id} className="problem-card">
-                  <div className="problem-header">
+              {problems.map((problem, idx) => (
+                <div
+                  key={problem.id}
+                  className="problem-card fade-up"
+                  style={{ animationDelay: `${idx * 0.06}s` }}
+                >
+                  {/* Header */}
+                  <div className="problem-card-header">
                     <span className="problem-num">Problem {idx + 1}</span>
                     {problems.length > 1 && (
-                      <button className="remove-btn" onClick={() => removeProblem(p.id)}>✕</button>
+                      <button className="remove-btn" onClick={() => removeProblem(problem.id)}>✕</button>
                     )}
                   </div>
-                  <textarea className="input" rows="3" placeholder="Describe the specific task or workflow bottleneck..."
-                    value={p.text} onChange={e => updateProblem(p.id, 'text', e.target.value)} />
 
-                  <div>
-                    <span className="input-label" style={{ marginBottom: '8px', display: 'block' }}>Characteristics:</span>
+                  {/* Problem description */}
+                  <textarea
+                    className="input"
+                    rows={3}
+                    placeholder={
+                      idx === 0
+                        ? 'e.g. Our team manually copies data from emails into our CRM every day — takes 2+ hours and causes errors...'
+                        : 'Describe another operational problem...'
+                    }
+                    value={problem.text}
+                    onChange={e => updateProblem(problem.id, 'text', e.target.value)}
+                    style={{ resize: 'vertical' }}
+                  />
+
+                  {/* Tags */}
+                  <div className="tag-row">
+                    <span className="tag-label">Characteristics:</span>
                     <div className="tag-group">
-                      {TAGS.map(tag => (
-                        <button key={tag} className={`tag-btn ${p.tags.includes(tag) ? 'selected' : ''}`}
-                          onClick={() => toggleTag(p.id, tag)}>{tag}</button>
+                      {PROBLEM_TAGS.map(tag => (
+                        <button
+                          key={tag}
+                          className={`tag-btn ${problem.tags.includes(tag) ? 'selected' : ''}`}
+                          onClick={() => toggleTag(problem.id, tag)}
+                          type="button"
+                        >
+                          {tag}
+                        </button>
                       ))}
                     </div>
                   </div>
 
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <span className="input-label">Severity:</span>
+                  {/* Severity */}
+                  <div className="severity-row">
+                    <span className="tag-label">Severity:</span>
                     <div className="severity-track">
-                      {[1,2,3,4,5].map(s => (
-                        <button key={s} className={`severity-btn ${p.severity === s ? 'selected' : ''}`}
-                          style={{
-                            borderColor: p.severity === s ? SEV_COLORS[s] : 'var(--border)',
-                            color: p.severity === s ? SEV_COLORS[s] : 'var(--text-3)'
-                          }}
-                          onClick={() => updateProblem(p.id, 'severity', s)}>{s}</button>
+                      {[1, 2, 3, 4, 5].map(n => (
+                        <button
+                          key={n}
+                          className={`severity-btn ${problem.severity === n ? 'selected' : ''}`}
+                          style={problem.severity === n
+                            ? { borderColor: SEVERITY_LABELS[n].color, color: SEVERITY_LABELS[n].color }
+                            : {}}
+                          onClick={() => updateProblem(problem.id, 'severity', n)}
+                          type="button"
+                        >
+                          {n}
+                        </button>
                       ))}
+                      <span className="severity-desc" style={{ color: SEVERITY_LABELS[problem.severity]?.color }}>
+                        {SEVERITY_LABELS[problem.severity]?.label}
+                      </span>
                     </div>
-                    <span className="severity-desc" style={{ color: SEV_COLORS[p.severity] }}>
-                      {SEV_LABELS[p.severity]}
-                    </span>
                   </div>
+
+                  {/* ── WORKFLOW FIELD ── */}
+                  <div className="workflow-field">
+                    <div className="workflow-field-header">
+                      <span className="tag-label">Your current workflow</span>
+                      <span className="workflow-optional">optional — but helps the AI spot automation points</span>
+                    </div>
+                    <textarea
+                      className="input workflow-textarea"
+                      rows={3}
+                      placeholder={workflowPlaceholder}
+                      value={problem.workflow_description}
+                      onChange={e => updateProblem(problem.id, 'workflow_description', e.target.value)}
+                      style={{ resize: 'vertical' }}
+                    />
+                    {problem.workflow_description?.trim().length > 10 && (
+                      <div className="workflow-steps-preview">
+                        {detectSteps(problem.workflow_description).map((step, i) => (
+                          <span key={i} className="workflow-step-chip">
+                            {i + 1}. {step}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
                 </div>
               ))}
             </div>
 
             {problems.length < 5 && (
-              <button className="add-btn-dashed" onClick={addProblem}>+ Add another problem</button>
+              <button className="add-problem-btn" onClick={addProblem} type="button">
+                + Add another problem
+              </button>
             )}
+
+            {/* Workflow fill-in nudge */}
+            {validProblems.length > 0 && workflowCount === 0 && (
+              <div className="workflow-nudge">
+                <span className="workflow-nudge-icon">◈</span>
+                <span className="workflow-nudge-text">
+                  Adding your current workflow helps the AI identify exactly
+                  which steps can be automated — not just that the problem exists.
+                </span>
+              </div>
+            )}
+
+            {error && <div className="error-banner">⚠ {error}</div>}
           </div>
         )}
 
-        {step === 2 && (
+        {/* ── STEP 2: Clusters ── */}
+        {step === 'clusters' && (
           <div className="fade-up">
             <div className="phase-title-block">
-              <span className="badge badge-accent">Detection Engine</span>
-              <h1 className="phase-title">Emerging Patterns</h1>
-              <p className="phase-desc">The AI is clustering your team's pain points into core problem areas.</p>
+              <p className="badge badge-accent">Insight Mining Agent</p>
+              <h2 className="phase-title">Problem clusters<br />detected</h2>
+              <p className="phase-desc">
+                Problems and workflows have been analysed and grouped into
+                strategic themes. Manual steps identified in workflows are
+                highlighted as automation targets.
+              </p>
             </div>
 
-            {clusters.length > 0 ? clusters.map((c, i) => (
-              <div key={i} className="insight-cluster fade-up">
-                <div className="cluster-header">
-                  <span className="cluster-icon">{c.icon || '◈'}</span>
-                  <span className="cluster-theme">{c.theme || c.title}</span>
-                  <span className="badge badge-amber">{c.count || 0} Mentions</span>
-                  {c.cross_department && <span className="badge badge-green">Cross-dept ⬡</span>}
-                </div>
-                <p className="cluster-summary">{c.description || c.summary}</p>
-                {c.departments && (
-                  <div className="cluster-depts">
-                    {c.departments.map(d => <span key={d} className="chip chip-dim">{d}</span>)}
-                  </div>
-                )}
-                {c.avg_severity && (
-                  <div className="severity-bar-row">
-                    <span className="input-label">Severity</span>
-                    <div className="severity-bar-track">
-                      <div className="severity-bar-fill" style={{ width: `${(c.avg_severity / 5) * 100}%` }}></div>
+            {clusters ? (
+              <div className="insight-clusters">
+                {clusters.map((cluster, i) => (
+                  <div key={i} className="insight-cluster">
+                    <div className="cluster-header">
+                      <span className="cluster-icon">{cluster.icon || '◈'}</span>
+                      <span className="cluster-theme">{cluster.theme}</span>
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        <span className="badge badge-default">
+                          {cluster.problem_count} problem{cluster.problem_count !== 1 ? 's' : ''}
+                        </span>
+                        {cluster.cross_department && (
+                          <span className="badge badge-green">Cross-dept ⬡</span>
+                        )}
+                        {cluster.manual_steps_identified > 0 && (
+                          <span className="badge badge-amber">
+                            {cluster.manual_steps_identified} manual step{cluster.manual_steps_identified !== 1 ? 's' : ''}
+                          </span>
+                        )}
+                      </div>
                     </div>
-                    <span className="severity-bar-val">{c.avg_severity}/5</span>
+
+                    <p className="cluster-summary">{cluster.summary}</p>
+
+                    {cluster.departments?.length > 0 && (
+                      <div className="cluster-depts">
+                        {cluster.departments.map(d => (
+                          <span key={d} className="chip chip-dim">{d}</span>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Automation targets from workflow analysis */}
+                    {cluster.automation_targets?.length > 0 && (
+                      <div className="automation-targets">
+                        <span className="automation-targets-label">Automatable steps identified →</span>
+                        <div className="automation-targets-list">
+                          {cluster.automation_targets.map((t, ti) => (
+                            <span key={ti} className="automation-target-chip">{t}</span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="cluster-potential">
+                      <span className="potential-label">AI Opportunity →</span>
+                      <span className="potential-text">{cluster.ai_opportunity}</span>
+                    </div>
+
+                    <div className="severity-bar-row">
+                      <span className="severity-bar-label">Avg severity</span>
+                      <div className="severity-bar-track">
+                        <div
+                          className="severity-bar-fill"
+                          style={{ width: `${(cluster.avg_severity / 5) * 100}%` }}
+                        />
+                      </div>
+                      <span className="severity-bar-val">{cluster.avg_severity?.toFixed(1)}/5</span>
+                    </div>
                   </div>
-                )}
-                <div className="cluster-potential">
-                  <span className="potential-label">AI Opportunity →</span>
-                  <span className="potential-text">{c.potential || c.ai_opportunity || 'Automation potential detected'}</span>
-                </div>
+                ))}
               </div>
-            )) : (
+            ) : (
               <div className="ai-thinking">
                 <div className="thinking-dots">
-                  <div className="thinking-dot"></div><div className="thinking-dot"></div><div className="thinking-dot"></div>
+                  <span className="thinking-dot" />
+                  <span className="thinking-dot" style={{ animationDelay: '0.2s' }} />
+                  <span className="thinking-dot" style={{ animationDelay: '0.4s' }} />
                 </div>
-                <div className="thinking-label">Clustering problems</div>
-                <div className="thinking-sub">Analyzing operational data...</div>
+                <p className="thinking-label">Analysing problems and workflows...</p>
+                <p className="thinking-sub">Clustering themes · Detecting manual steps · Identifying automation targets</p>
+              </div>
+            )}
+
+            {liveProblems.length > validProblems.length && (
+              <div className="live-problems-box">
+                <p className="live-problems-title">
+                  <span className="live-dot pulse" style={{ marginRight: 8 }} />
+                  {liveProblems.length} total problems submitted by all participants
+                </p>
               </div>
             )}
           </div>
         )}
-      </main>
+      </div>
 
-      <footer className="phase-footer">
-        <button className="btn btn-ghost" onClick={() => step > 1 ? setStep(1) : null}>← Back</button>
-        {step === 1 ? (
-          <button className="btn btn-primary" disabled={validCount === 0 || loading} onClick={handleSubmit}>
-            {loading ? <div className="spinner"></div> : `Analyze ${validCount} Problem${validCount !== 1 ? 's' : ''} →`}
-          </button>
-        ) : (
-          <button className="btn btn-primary" onClick={onComplete}>Proceed to Data Audit →</button>
+      {/* Footer */}
+      <div className="phase-footer">
+        {step === 'submit' && (
+          <>
+            <div />
+            <button
+              className="btn btn-primary"
+              disabled={validProblems.length === 0 || submitting}
+              onClick={handleSubmit}
+            >
+              {submitting
+                ? <><span className="spinner spinner-blue" /> Analysing...</>
+                : `Submit ${validProblems.length} Problem${validProblems.length !== 1 ? 's' : ''} →`}
+            </button>
+          </>
         )}
-      </footer>
+        {step === 'clusters' && clusters && (
+          <>
+            <div />
+            <button className="btn btn-primary" onClick={onComplete}>
+              Proceed to Activities →
+            </button>
+          </>
+        )}
+      </div>
     </div>
-  );
+  )
 }
 
-export default Phase3_Problems;
+// ── Utility: detect discrete steps from workflow text ──────────────────────
+// Splits workflow description into recognisable step chunks for the preview
+function detectSteps(text) {
+  if (!text || text.trim().length < 20) return []
+  // Split on numbered lists, "then", "after that", "next", commas between verbs
+  const parts = text
+    .split(/(?:\d+\.\s|\bthen\b|\bafter that\b|\bnext\b|\bfinally\b)/i)
+    .map(s => s.replace(/[,;]+$/, '').trim())
+    .filter(s => s.length > 8 && s.length < 80)
+    .slice(0, 5)
+  return parts.length > 1 ? parts : []
+}

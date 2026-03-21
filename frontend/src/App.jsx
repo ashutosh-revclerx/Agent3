@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import './App.css';
-import './components/phases.css';
+import './styles/phases.css';
 import Phase0_Setup from './components/Phase0_Setup';
 import Phase1_Onboarding from './components/Phase1_Onboarding';
 import Phase2_Context from './components/Phase2_Context';

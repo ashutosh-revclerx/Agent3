@@ -12,22 +12,26 @@ const FAMILIARITY = [
   { level: 5, label: 'Regular User', desc: 'Work with AI tools deeply and regularly' },
 ];
 
+const cleanCode = (value) => value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
+
 function Phase1_Onboarding({ api, session, role, onComplete, onBack }) {
   const [sub, setSub] = useState(role === 'participant' && !session ? 'CODE' : 'PROFILE');
   const [code, setCode] = useState('');
   const [currentSession, setCurrentSession] = useState(session);
   const [form, setForm] = useState({
-    name: '', role: '', department: '',
+    name: '', role: '', department: '', top_challenge: '',
     ai_confidence: 3
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
   const handleValidateCode = async () => {
-    if (code.length < 4) return;
+    const cleaned = cleanCode(code);
+    setCode(cleaned);
+    if (cleaned.length !== 6) { setError('Enter the 6-character code shown by the host.'); return; }
     setLoading(true); setError('');
     try {
-      const data = await api(`/session/${code.toUpperCase()}`);
+      const data = await api(`/session/${cleaned}`);
       setCurrentSession(data);
       setSub('PROFILE');
     } catch {
@@ -71,7 +75,7 @@ function Phase1_Onboarding({ api, session, role, onComplete, onBack }) {
           <p className="phase-desc">Check your email or host screen for the 6-character code.</p>
           <input className="input" style={{ fontSize: '28px', letterSpacing: '0.2em', textAlign: 'center', textTransform: 'uppercase', maxWidth: '280px' }}
             maxLength={6} placeholder="000000" value={code}
-            onChange={e => setCode(e.target.value)} autoFocus
+            onChange={e => setCode(cleanCode(e.target.value))} autoFocus
             onKeyDown={e => e.key === 'Enter' && handleValidateCode()} />
           {error && <div className="error-banner">{error}</div>}
           <button className="btn btn-primary" disabled={code.length < 4 || loading} onClick={handleValidateCode}>
@@ -137,6 +141,12 @@ function Phase1_Onboarding({ api, session, role, onComplete, onBack }) {
               <input className="input" placeholder="e.g. Engineering"
                 value={form.department} onChange={e => setForm({...form, department: e.target.value})} />
             </div>
+          </div>
+
+          <div className="input-group">
+            <label className="input-label">Top challenge you're facing</label>
+            <textarea className="input" rows={3} placeholder="e.g. Streamlining reporting, reducing manual work..."
+              value={form.top_challenge} onChange={e => setForm({...form, top_challenge: e.target.value})} />
           </div>
 
           <div className="input-group">

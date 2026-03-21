@@ -92,8 +92,12 @@ class JoinRequest(BaseModel):
     department: str;  top_challenge: str;  ai_confidence: int
 
 class Phase2Request(BaseModel):
-    session_code: str;  participant_id: Optional[str] = None
-    objectives: List[str];  growth_areas: List[str];  challenges: str
+    session_code: str
+    participant_id: Optional[str] = None
+    participant_role: Optional[str] = None
+    objectives: List[str]
+    growth_areas: List[str]
+    challenges: str
 
 class ProblemItem(BaseModel):
     text: str;  tags: List[str] = [];  severity: int = 3;  department: str = ""
@@ -230,16 +234,32 @@ async def submit_context(req: Phase2Request):
     s = sessions[code]
 
     store(code, "phase2", {
-        "participant_id": req.participant_id,
-        "objectives": req.objectives, "growth_areas": req.growth_areas,
-        "challenges": req.challenges,
+        "participant_id":   req.participant_id,
+        "participant_role": req.participant_role,
+        "objectives":       req.objectives,
+        "growth_areas":     req.growth_areas,
+        "challenges":       req.challenges,
     })
     await broadcast(code, {"type": "context_count", "count": len(get_store(code, "phase2"))})
 
-    # Agent 2
-    objective_map = insight_mining.build_objective_map(
-        s["company"], s["industry"], req.objectives, req.growth_areas, req.challenges
-    )
+    # Agent 2 (guarded to avoid 500s if LLM fails)
+    try:
+        objective_map = insight_mining.build_objective_map(
+            s["company"], s["industry"], req.objectives, req.growth_areas,
+            req.challenges, session=s, participant_role=req.participant_role
+        )
+    except Exception as e:
+        print(f"build_objective_map error: {e}")
+        objective_map = {
+            "dominant_theme": f"{s['company']} focus areas",
+            "clusters": [{
+                "icon": "◆",
+                "theme": "Operational Priorities",
+                "signals": len(req.objectives) or 1,
+                "summary": req.challenges[:200] or "Collecting workshop context.",
+                "ai_potential": "AI-assisted workflow automation and insight dashboards"
+            }]
+        }
     s["workshop_data"]["objective_map"] = objective_map
 
     # Agent 1: phase intro for phase 3
@@ -271,9 +291,12 @@ async def submit_problems(req: Phase3Request):
 
     for p in req.problems:
         store(code, "phase3", {
-            "participant_id": req.participant_id,
-            "text": p.text, "tags": p.tags,
-            "severity": p.severity, "department": p.department,
+            "participant_id":      req.participant_id,
+            "text":                p.text,
+            "tags":                p.tags,
+            "severity":            p.severity,
+            "department":          p.department,
+            "workflow_description": p.workflow_description,
         })
 
     all_problems = get_store(code, "phase3")
