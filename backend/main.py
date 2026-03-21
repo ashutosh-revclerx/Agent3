@@ -30,6 +30,7 @@ from agents import poll_consensus
 from agents import industry_benchmark
 from agents import prioritisation_roi
 from agents import deck_builder
+from seed_context import seed_session, build_system_prompt, get_department_names, BUSINESS_CONTEXT
 
 app = FastAPI(title="AI Consulting Copilot", version="2.0.0")
 
@@ -166,15 +167,18 @@ def create_session(req: CreateSessionRequest):
         "team_confidence": None, # set by Activity B
         "workshop_data": {},     # accumulates all AI outputs
     }
+    # Inject business entity seed context into all 7 agents
+    session = seed_session(session)
     sessions[code] = session
 
     # Agent 5: pre-load industry benchmarks
     benchmarks = industry_benchmark.get_industry_benchmarks(req.industry)
     session["workshop_data"]["industry_benchmarks"] = benchmarks
 
-    # Agent 1: generate phase 0 intro message
+    # Agent 1: generate phase 0 intro message (now seed-aware)
     intro = facilitator.get_phase_intro(0, req.company)
     print(f"✅ Session: {code} | {req.company} | {req.industry}")
+    print(f"   Seeded: {len(session['known_departments'])} departments, {len(session['pillar_names'])} pillars")
     return {**session, "intro_message": intro}
 
 
@@ -539,3 +543,47 @@ async def websocket_endpoint(websocket: WebSocket, session_code: str):
             try: ws_connections[code].remove(websocket)
             except ValueError: pass
         print(f"🔌 WS disconnected: {code}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Seed Context — inspect what's pre-loaded for a session
+# ─────────────────────────────────────────────────────────────────────────────
+@app.get("/session/{code}/seed")
+def get_session_seed(code: str):
+    """Returns the pre-loaded seed context for a session (for debugging)."""
+    code = code.upper()
+    if code not in sessions:
+        raise HTTPException(404, "Session not found")
+    s = sessions[code]
+    return {
+        "session_code":        code,
+        "pillars":             s.get("pillar_names", []),
+        "departments":         s.get("known_departments", []),
+        "agents_seeded":       list(s.get("seed", {}).keys()),
+        "pain_points_loaded":  len(s.get("seed", {}).get("insight_mining", {}).get("known_pain_points", [])),
+        "ai_opps_loaded":      len(s.get("seed", {}).get("industry_benchmark", {}).get("seeded_opportunities", [])),
+        "quick_win_candidates":s.get("seed", {}).get("prioritisation_roi", {}).get("quick_win_candidates", []),
+    }
+
+@app.get("/seed/overview")
+def seed_overview():
+    """Global overview of the business entity seed — no session needed."""
+    from seed_context import get_all_departments, get_all_pain_points, get_all_ai_opportunities
+    depts = get_all_departments()
+    return {
+        "entity":          BUSINESS_CONTEXT["entity"],
+        "pillars":         [p["name"] for p in BUSINESS_CONTEXT["pillars"]],
+        "departments":     [d["name"] for d in depts],
+        "total_pain_points":    len(get_all_pain_points()),
+        "total_ai_opportunities": len(get_all_ai_opportunities()),
+        "structure": {
+            pillar["name"]: {
+                "purpose": pillar["purpose"],
+                "departments": [
+                    {"name": d["name"], "function": d["function"]}
+                    for d in pillar["departments"]
+                ]
+            }
+            for pillar in BUSINESS_CONTEXT["pillars"]
+        }
+    }
