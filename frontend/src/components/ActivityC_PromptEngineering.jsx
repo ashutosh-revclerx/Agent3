@@ -1,3 +1,4 @@
+import VoiceTextInput from './Voicetextinput'
 import { useState, useEffect } from 'react'
 import './phases.css'
 
@@ -8,7 +9,7 @@ const SCORE_DIMENSIONS = [
   { key: 'constraints', label: 'Constraints',  desc: 'Are limits or format specified?' },
 ]
 
-export default function ActivityC_PromptEngineering({ api, session, participant, mode = 'participant', onComplete }) {
+export default function ActivityC_PromptEngineering({ api, apiBase, session, participant, mode = 'participant', onComplete }) {
   // step: loading → scenario → write → scored → simulation
   const [step,        setStep]       = useState('loading')
   const [scenario,    setScenario]   = useState(null)   // { title, situation, task, data_available, expected_output }
@@ -40,8 +41,8 @@ export default function ActivityC_PromptEngineering({ api, session, participant,
       })
       setScenario(result)
       setStep('scenario')
-    } catch {
-      setLoadError('Could not generate scenario. Is the backend running?')
+    } catch (err) {
+      setLoadError(err.message || 'Could not generate scenario. Is the backend running?')
       setStep('scenario') // show error state
     }
   }
@@ -64,8 +65,8 @@ export default function ActivityC_PromptEngineering({ api, session, participant,
       })
       setScored(result)
       setStep('scored')
-    } catch {
-      setError('Could not score prompt. Is the backend running?')
+    } catch (err) {
+      setError(err.message || 'Could not score prompt. Is the backend running?')
     } finally {
       setSubmitting(false)
     }
@@ -88,8 +89,8 @@ export default function ActivityC_PromptEngineering({ api, session, participant,
       })
       setSimulation(result)
       setStep('simulation')
-    } catch {
-      setError('Could not run simulation.')
+    } catch (err) {
+      setError(err.message || 'Could not run simulation.')
     } finally {
       setSimRunning(false)
     }
@@ -233,21 +234,18 @@ export default function ActivityC_PromptEngineering({ api, session, participant,
             )}
 
             <div className="phase-form">
-              <div className="input-group">
-                <label>Your prompt</label>
-                <textarea
-                  className="input"
-                  rows={7}
-                  placeholder={`Write your AI instruction here. Reference the specific data, format, and constraints relevant to your ${participant?.role || 'role'} scenario...`}
-                  value={prompt}
-                  onChange={e => setPrompt(e.target.value)}
-                  style={{ resize: 'vertical', fontFamily: 'var(--font-b)', fontSize: 13, lineHeight: 1.7 }}
-                  autoFocus
-                />
-                <div style={{ textAlign: 'right', fontSize: 11, color: 'var(--text-3)', marginTop: 4 }}>
-                  {prompt.length} characters
-                </div>
-              </div>
+              <VoiceTextInput
+                label="Your prompt"
+                value={prompt}
+                onChange={setPrompt}
+                rows={7}
+                placeholder={`Write your AI instruction here. Reference the specific data, format, and constraints relevant to your ${participant?.role || 'role'} scenario...`}
+                hint="Speak your instruction or type it — reference the specific data and output format from your scenario"
+                aiQuestion={scenario ? `Now write an AI prompt to handle this task: ${scenario.task}` : undefined}
+                cleanWithAI={false}
+                apiBase={apiBase}
+                minLength={20}
+              />
               {error && <div className="error-banner">⚠ {error}</div>}
             </div>
           </div>

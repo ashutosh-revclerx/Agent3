@@ -1,192 +1,225 @@
-import React, { useState } from 'react';
+import { useMemo, useState } from 'react'
+import AgentChat from './Agentchat'
+import './phases.css'
 
 const ROLES = [
-  'CEO/Founder', 'CTO/Technology Leader', 'COO/Operations',
-  'Product Manager', 'Data/AI Engineer', 'Business Analyst',
-  'Department Head', 'Consultant', 'Other'
-];
+  'CEO / Founder', 'CTO / Technology Leader', 'COO / Operations',
+  'Product Manager', 'Data / AI Engineer', 'Business Analyst',
+  'Department Head', 'Consultant', 'Other',
+]
 
-const FAMILIARITY = [
-  { level: 1, label: 'Getting Started', desc: 'New to AI tools and their capabilities' },
-  { level: 3, label: 'Intermediate', desc: 'Have used some AI tools for specific tasks' },
-  { level: 5, label: 'Regular User', desc: 'Work with AI tools deeply and regularly' },
-];
+const CHALLENGE_QUESTION = {
+  'CEO / Founder': 'What is the single biggest thing holding your business back from its next stage of growth right now?',
+  'CTO / Technology Leader': 'What technical or infrastructure limitation is creating the most friction for your team right now?',
+  'COO / Operations': 'What operational bottleneck comes up most often in your leadership reviews?',
+  'Product Manager': 'What is slowing your team\'s ability to ship valuable product to customers?',
+  'Data / AI Engineer': 'What is the biggest technical obstacle preventing your team from delivering AI at production quality?',
+  'Business Analyst': 'Which reporting or analysis task takes the most manual effort and produces the least reliable output?',
+  'Department Head': 'What keeps your team from performing at its best day to day?',
+  'Consultant': 'What is the most common reason client AI initiatives fail to reach production, in your experience?',
+  'Other': 'What is the biggest operational challenge in your day-to-day work right now?',
+}
 
-const cleanCode = (value) => value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
+const CHALLENGE_HINT = {
+  'CTO / Technology Leader': 'Think about legacy systems, data pipelines, deployment speed, or team capability gaps.',
+  'Data / AI Engineer': 'Think about data quality, model reliability, tooling gaps, or deployment friction.',
+  'Business Analyst': 'Think about data gathering, spreadsheet wrangling, or insight-to-decision delays.',
+  default: 'Be specific - the more detail you give, the more precisely the AI can identify relevant use cases.',
+}
 
-function Phase1_Onboarding({ api, session, role, onComplete, onBack }) {
-  const [sub, setSub] = useState(role === 'participant' && !session ? 'CODE' : 'PROFILE');
-  const [code, setCode] = useState('');
-  const [currentSession, setCurrentSession] = useState(session);
-  const [form, setForm] = useState({
-    name: '', role: '', department: '', top_challenge: '',
-    ai_confidence: 3
-  });
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
+export default function Phase1_Onboarding({ api, apiBase, session, role, onComplete, onBack }) {
+  const [sessionCode, setSessionCode] = useState(session?.code || '')
+  const [step, setStep] = useState(role === 'host' ? 'profile' : 'code')
+  const [resolvedSession, setResolvedSession] = useState(session)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(null)
 
-  const handleValidateCode = async () => {
-    const cleaned = cleanCode(code);
-    setCode(cleaned);
-    if (cleaned.length !== 6) { setError('Enter the 6-character code shown by the host.'); return; }
-    setLoading(true); setError('');
+  const [name, setName] = useState('')
+  const [selectedRole, setSelectedRole] = useState('')
+  const [department, setDepartment] = useState('')
+
+  const [chatDone, setChatDone] = useState(false)
+  const [topChallenge, setTopChallenge] = useState('')
+
+  const handleCodeSubmit = async () => {
+    if (!sessionCode.trim()) return
+    setLoading(true)
+    setError(null)
     try {
-      const data = await api(`/session/${cleaned}`);
-      setCurrentSession(data);
-      setSub('PROFILE');
+      const data = await api(`/session/${sessionCode.toUpperCase()}`)
+      setResolvedSession(data)
+      setStep('profile')
     } catch {
-      setError('Invalid session code or session not found.');
+      setError('Session not found. Check your code and try again.')
     } finally {
-      setLoading(false);
+      setLoading(false)
     }
-  };
+  }
+
+  const isFormValid = name.trim() && selectedRole && department.trim() && chatDone
 
   const handleJoin = async () => {
-    setLoading(true); setError('');
+    if (!isFormValid) return
+    setLoading(true)
+    setError(null)
     try {
       const data = await api('/participant/join', {
         method: 'POST',
         body: JSON.stringify({
-          session_code: currentSession.code,
-          ...form
-        })
-      });
-      onComplete({ participant: data, session: currentSession });
-    } catch {
-      setError('Error joining session. Please try again.');
+          session_code: resolvedSession?.code || sessionCode,
+          name,
+          role: selectedRole,
+          department,
+          top_challenge: topChallenge,
+          ai_confidence: 3,
+        }),
+      })
+      onComplete(data)
+    } catch (err) {
+      setError(err.message || 'Could not join session. Please try again.')
     } finally {
-      setLoading(false);
+      setLoading(false)
     }
-  };
-
-  if (sub === 'CODE') {
-    return (
-      <div className="phase-shell fade-up">
-        <header className="phase-header">
-          <div className="phase-logo"><span className="logo-icon">◈</span> AI Copilot</div>
-          <div className="phase-indicator">
-            <div className="phase-ind-dot"></div>
-            <span className="phase-ind-label">Join Session</span>
-          </div>
-        </header>
-        <main className="phase-body" style={{ justifyContent: 'center', alignItems: 'center', textAlign: 'center' }}>
-          <span className="badge badge-accent">Participant Join</span>
-          <h1 className="phase-title">Enter Session Code</h1>
-          <p className="phase-desc">Check your email or host screen for the 6-character code.</p>
-          <input className="input" style={{ fontSize: '28px', letterSpacing: '0.2em', textAlign: 'center', textTransform: 'uppercase', maxWidth: '280px' }}
-            maxLength={6} placeholder="000000" value={code}
-            onChange={e => setCode(cleanCode(e.target.value))} autoFocus
-            onKeyDown={e => e.key === 'Enter' && handleValidateCode()} />
-          {error && <div className="error-banner">{error}</div>}
-          <button className="btn btn-primary" disabled={code.length < 4 || loading} onClick={handleValidateCode}>
-            {loading ? <div className="spinner"></div> : 'Find Session'}
-          </button>
-        </main>
-        <footer className="phase-footer">
-          <button className="btn btn-ghost" onClick={onBack}>← Back</button>
-          <div></div>
-        </footer>
-      </div>
-    );
   }
 
-  const profileValid = form.name && form.role && form.department;
+  const chatQuestions = useMemo(() => (
+    selectedRole
+      ? [{
+          id: 'challenge',
+          question: CHALLENGE_QUESTION[selectedRole] || CHALLENGE_QUESTION.Other,
+          hint: CHALLENGE_HINT[selectedRole] || CHALLENGE_HINT.default,
+          placeholder: 'Describe it in your own words - specific examples help most.',
+          field: 'top_challenge',
+          required: true,
+        }]
+      : []
+  ), [selectedRole])
 
   return (
     <div className="phase-shell fade-up">
-      <header className="phase-header">
-        <div className="phase-logo"><span className="logo-icon">◈</span> AI Copilot</div>
+      <div className="phase-header">
+        <div className="phase-logo">AI Copilot</div>
         <div className="phase-indicator">
-          <div className="phase-ind-dot"></div>
-          <span className="phase-ind-label">Phase 1 — Onboarding</span>
+          <div className="phase-dot pulse" />
+          <span className="phase-label">Phase 1 Onboarding</span>
         </div>
-      </header>
+      </div>
 
-      <main className="phase-body">
-        {currentSession && (
-          <div className="session-code-box">
-            <span className="session-code-label">Active Session</span>
-            <span className="session-code-value">{currentSession.code}</span>
-            <div className="info-card" style={{ marginTop: '8px' }}>
-              <div className="info-row"><span className="info-key">Company</span><span className="info-val">{currentSession.company}</span></div>
-              <div className="info-row"><span className="info-key">Industry</span><span className="info-val">{currentSession.industry}</span></div>
-              <div className="info-row"><span className="info-key">Duration</span><span className="info-val">{currentSession.duration_mins} min</span></div>
-            </div>
-            {role === 'host' && <span className="session-code-hint">Share this code with participants</span>}
+      {step === 'code' && (
+        <div className="phase-body">
+          <div className="phase-title-block">
+            <span className="badge badge-accent">Join Session</span>
+            <h2 className="phase-title">Enter your<br />session code</h2>
+            <p className="phase-desc">Your host will share a 6-character code. Enter it below.</p>
           </div>
-        )}
-
-        <div className="phase-title-block">
-          <h1 className="phase-title">Complete your profile</h1>
+          <div className="input-group">
+            <input
+              className="input"
+              style={{ fontSize: 28, letterSpacing: '0.2em', textAlign: 'center', textTransform: 'uppercase' }}
+              maxLength={6}
+              placeholder="AB12CD"
+              value={sessionCode}
+              onChange={e => setSessionCode(e.target.value.toUpperCase())}
+              onKeyDown={e => e.key === 'Enter' && handleCodeSubmit()}
+              autoFocus
+            />
+          </div>
+          {error && <div className="error-banner">âš  {error}</div>}
+          <div className="phase-footer" style={{ marginTop: 'auto' }}>
+            <div />
+            <button className="btn btn-primary" onClick={handleCodeSubmit} disabled={loading || !sessionCode.trim()}>
+              {loading ? <><span className="spinner" /> Checking...</> : 'Join â†’'}
+            </button>
+          </div>
         </div>
+      )}
 
-        <div className="phase-form">
-          <div className="input-group">
-            <label className="input-label">Full Name</label>
-            <input className="input" placeholder="e.g. Jordan Smith"
-              value={form.name} onChange={e => setForm({...form, name: e.target.value})} />
-          </div>
-
-          <div className="grid-2">
-            <div className="input-group">
-              <label className="input-label">Your Role</label>
-              <select className="input" value={form.role}
-                onChange={e => setForm({...form, role: e.target.value})}>
-                <option value="" disabled>Select role...</option>
-                {ROLES.map(r => <option key={r} value={r}>{r}</option>)}
-              </select>
+      {step === 'profile' && (
+        <>
+          {resolvedSession && (
+            <div style={{ padding: '8px 22px', background: 'var(--accent-light)', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+              <span style={{ fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--accent)' }}>Joining</span>
+              <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', fontFamily: 'var(--font-h)' }}>
+                {resolvedSession.company} Â· {resolvedSession.code}
+              </span>
             </div>
-            <div className="input-group">
-              <label className="input-label">Department</label>
-              <input className="input" placeholder="e.g. Engineering"
-                value={form.department} onChange={e => setForm({...form, department: e.target.value})} />
+          )}
+
+          <div className="phase-body">
+            <div className="phase-title-block">
+              <span className="badge badge-accent">Your Profile</span>
+              <h2 className="phase-title">Tell us about<br />yourself</h2>
+              <p className="phase-desc">This shapes the questions and AI use cases tailored to your role.</p>
             </div>
-          </div>
 
-          <div className="input-group">
-            <label className="input-label">Top challenge you're facing</label>
-            <textarea className="input" rows={3} placeholder="e.g. Streamlining reporting, reducing manual work..."
-              value={form.top_challenge} onChange={e => setForm({...form, top_challenge: e.target.value})} />
-          </div>
+            <div className="phase-form">
+              <div className="input-group">
+                <label className="input-label">Full name</label>
+                <input className="input" placeholder="Your name" value={name} onChange={e => setName(e.target.value)} />
+              </div>
 
-          <div className="input-group">
-            <label className="input-label">How familiar are you with AI tools?</label>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              {FAMILIARITY.map(c => (
-                <button key={c.level} type="button" onClick={() => setForm({...form, ai_confidence: c.level})}
-                  style={{
-                    display: 'flex', alignItems: 'center', gap: '16px', padding: '14px 16px',
-                    background: form.ai_confidence === c.level ? 'var(--accent-glow)' : 'var(--bg-card)',
-                    border: form.ai_confidence === c.level ? '0.5px solid var(--accent-soft)' : '0.5px solid var(--border)',
-                    borderRadius: 'var(--r-md)', textAlign: 'left', cursor: 'pointer',
-                    transition: 'all var(--t)',
-                    boxShadow: form.ai_confidence === c.level ? 'var(--shadow-glow)' : 'none'
-                  }}>
-                  <div>
-                    <div style={{ fontSize: '13px', fontWeight: 700, fontFamily: 'var(--font-h)',
-                      color: form.ai_confidence === c.level ? 'var(--text)' : 'var(--text-2)' }}>{c.label}</div>
-                    <div style={{ fontSize: '11px', color: 'var(--text-3)' }}>{c.desc}</div>
-                  </div>
-                </button>
-              ))}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                <div className="input-group">
+                  <label className="input-label">Your role</label>
+                  <select
+                    className="input"
+                    value={selectedRole}
+                    onChange={e => {
+                      setSelectedRole(e.target.value)
+                      setChatDone(false)
+                      setTopChallenge('')
+                    }}
+                  >
+                    <option value="">Select role...</option>
+                    {ROLES.map(r => <option key={r} value={r}>{r}</option>)}
+                  </select>
+                </div>
+                <div className="input-group">
+                  <label className="input-label">Department</label>
+                  <input className="input" placeholder="e.g. Engineering" value={department} onChange={e => setDepartment(e.target.value)} />
+                </div>
+              </div>
+
+              {selectedRole && (
+                <div className="input-group">
+                  <label className="input-label">
+                    One question from the AI
+                    <span style={{ marginLeft: 6, fontSize: 10, color: 'var(--accent)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                      Interactive
+                    </span>
+                  </label>
+                  <AgentChat
+                    key={selectedRole}
+                    questions={chatQuestions}
+                    agentName="Facilitator Agent"
+                    agentAvatar="â—ˆ"
+                    apiBase={apiBase}
+                    onComplete={(answers) => {
+                      setTopChallenge(answers.top_challenge || '')
+                      setChatDone(true)
+                    }}
+                  />
+                </div>
+              )}
+
+              {!selectedRole && (
+                <div style={{ padding: '12px 14px', background: 'var(--bg-subtle)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', fontSize: 12, color: 'var(--text-3)' }}>
+                  Select your role above to unlock the AI question.
+                </div>
+              )}
             </div>
+
+            {error && <div className="error-banner">âš  {error}</div>}
           </div>
 
-          {error && <div className="error-banner">{error}</div>}
-        </div>
-      </main>
-
-      <footer className="phase-footer">
-        <button className="btn btn-ghost" onClick={() => {
-          if (sub === 'PROFILE' && role === 'participant' && !session) setSub('CODE');
-          else onBack();
-        }}>← Back</button>
-        <button className="btn btn-primary" disabled={!profileValid || loading} onClick={handleJoin}>
-          {loading ? <div className="spinner"></div> : 'Enter Workshop →'}
-        </button>
-      </footer>
+          <div className="phase-footer">
+            <button className="btn btn-ghost" onClick={onBack}>â† Back</button>
+            <button className="btn btn-primary" onClick={handleJoin} disabled={!isFormValid || loading}>
+              {loading ? <><span className="spinner" /> Joining...</> : 'Enter Workshop â†’'}
+            </button>
+          </div>
+        </>
+      )}
     </div>
-  );
+  )
 }
-
-export default Phase1_Onboarding;

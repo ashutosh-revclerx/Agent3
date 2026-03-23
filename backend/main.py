@@ -14,13 +14,15 @@ Multi-Agent Architecture:
   Agent 7 → deck_builder         (Phase 11 deliverables)
 """
 import uuid, random, string, datetime, json, asyncio, os
+from pathlib import Path
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional, List
 from dotenv import load_dotenv
 
-load_dotenv()
+ENV_PATH = Path(__file__).resolve().parent / ".env"
+load_dotenv(ENV_PATH)
 
 # ── Import all 7 agents ───────────────────────────────────────────────────────
 from agents import facilitator
@@ -92,15 +94,19 @@ class JoinRequest(BaseModel):
     department: str;  top_challenge: str;  ai_confidence: int
 
 class Phase2Request(BaseModel):
-    session_code: str
-    participant_id: Optional[str] = None
-    participant_role: Optional[str] = None
-    objectives: List[str]
-    growth_areas: List[str]
-    challenges: str
+    session_code:     str
+    participant_id:   Optional[str] = None
+    participant_role: str = "Other"
+    objectives:       List[str]
+    growth_areas:     List[str]
+    challenges:       str
 
 class ProblemItem(BaseModel):
-    text: str;  tags: List[str] = [];  severity: int = 3;  department: str = ""
+    text: str
+    tags: List[str] = Field(default_factory=list)
+    severity: int = 3
+    department: str = ""
+    workflow_description: str = ""
 
 class Phase3Request(BaseModel):
     session_code: str;  participant_id: Optional[str] = None
@@ -117,20 +123,26 @@ class ConfidenceRequest(BaseModel):
     session_code: str;  participant_id: Optional[str] = None
     confidence_level: int;  concerns: List[str] = [];  expectations: str = ""
 
-class PromptRequest(BaseModel):
-    session_code: str;  participant_id: Optional[str] = None
-    prompt: str;  task_context: str = ""
-
 class ScenarioRequest(BaseModel):
-    session_code: str
+    session_code:   str
     participant_id: Optional[str] = None
-    role: str
-    department: str
+    role:           str = "Other"
+    department:     str = ""
+
+class PromptRequest(BaseModel):
+    session_code:   str
+    participant_id: Optional[str] = None
+    prompt:         str
+    task_context:   str = ""
+    scenario_id:    Optional[str] = None
+    scenario:       Optional[dict] = None
 
 class SimulationRequest(BaseModel):
-    session_code: str;  participant_id: Optional[str] = None
-    prompt: str;  task_context: str = ""
-    scenario: Optional[dict] = None
+    session_code:   str
+    participant_id: Optional[str] = None
+    prompt:         str
+    task_context:   str = ""
+    scenario:       Optional[dict] = None
 
 class VoteRequest(BaseModel):
     session_code: str;  participant_id: Optional[str] = None
@@ -236,50 +248,29 @@ async def join_participant(req: JoinRequest):
 # ─────────────────────────────────────────────────────────────────────────────
 @app.post("/phase/context")
 async def submit_context(req: Phase2Request):
-    try:
-        if not req.session_code:
-            raise HTTPException(400, "session_code is required")
-        code = req.session_code.upper()
-        if code not in sessions: raise HTTPException(404, "Session not found")
-        s = sessions[code]
+    code = req.session_code.upper()
+    if code not in sessions: raise HTTPException(404, "Session not found")
+    s = sessions[code]
 
-        store(code, "phase2", {
-            "participant_id":   req.participant_id,
-            "participant_role": req.participant_role,
-            "objectives":       req.objectives,
-            "growth_areas":     req.growth_areas,
-            "challenges":       req.challenges,
-        })
-        await broadcast(code, {"type": "context_count", "count": len(get_store(code, "phase2"))})
+    store(code, "phase2", {
+        "participant_id":   req.participant_id,
+        "participant_role": req.participant_role,
+        "objectives":       req.objectives,
+        "growth_areas":     req.growth_areas,
+        "challenges":       req.challenges,
+    })
+    await broadcast(code, {"type": "context_count", "count": len(get_store(code, "phase2"))})
 
-        # Agent 2 (guarded)
-        try:
-            objective_map = insight_mining.build_objective_map(
-                s["company"], s["industry"], req.objectives, req.growth_areas,
-                req.challenges, session=s, participant_role=req.participant_role or "Other"
-            )
-        except Exception as e:
-            print(f"build_objective_map error: {e}")
-            objective_map = {
-                "dominant_theme": f"{s['company']} focus areas",
-                "clusters": [{
-                    "icon": "◆",
-                    "theme": "Operational Priorities",
-                    "signals": len(req.objectives) or 1,
-                    "summary": req.challenges[:200] or "Collecting workshop context.",
-                    "ai_potential": "AI-assisted workflow automation and insight dashboards"
-                }]
-            }
-        s["workshop_data"]["objective_map"] = objective_map
+    # Agent 2
+    objective_map = insight_mining.build_objective_map(
+        s["company"], s["industry"], req.objectives, req.growth_areas,
+        req.challenges
+    )
+    s["workshop_data"]["objective_map"] = objective_map
 
-        # Agent 1: phase intro for phase 3
-        transition = facilitator.get_transition_message("Business Context", "Problem Discovery", s["company"])
-        return {"objective_map": objective_map, "transition_message": transition}
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"/phase/context error: {e}")
-        raise HTTPException(500, "Phase 2 processing failed") from e
+    # Agent 1: phase intro for phase 3
+    transition = facilitator.get_transition_message("Business Context", "Problem Discovery", s["company"])
+    return {"objective_map": objective_map, "transition_message": transition}
 
 
 # HOST: reveal Phase 2 results to participants
@@ -651,3 +642,77 @@ def seed_overview():
             for pillar in BUSINESS_CONTEXT["pillars"]
         }
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Voice — ElevenLabs TTS + transcript cleaning
+# ─────────────────────────────────────────────────────────────────────────────
+import httpx
+
+class SpeakRequest(BaseModel):
+    model_config = {"protected_namespaces": ()}
+    text: str
+    voice_id: str = "EXAVITQu4vr4xnSDxMaL"  # ElevenLabs "Sarah" — professional, warm
+    model_id: str = "eleven_turbo_v2"
+
+class CleanRequest(BaseModel):
+    text: str
+
+@app.post("/ai/speak")
+async def speak(req: SpeakRequest):
+    """
+    Proxy text to ElevenLabs TTS and stream MP3 audio back to the frontend.
+    Falls back gracefully if ELEVENLABS_API_KEY is not set.
+    """
+    from fastapi.responses import StreamingResponse
+    api_key = os.getenv("ELEVENLABS_API_KEY")
+    if not api_key:
+        # Return a tiny silent MP3 so the frontend doesn't break
+        raise HTTPException(503, "ELEVENLABS_API_KEY not set — voice disabled")
+
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{req.voice_id}/stream"
+    headers = {
+        "xi-api-key": api_key,
+        "Content-Type": "application/json",
+        "Accept": "audio/mpeg",
+    }
+    payload = {
+        "text": req.text[:1000],  # cap at 1000 chars per call
+        "model_id": req.model_id,
+        "voice_settings": {
+            "stability": 0.5,
+            "similarity_boost": 0.75,
+        },
+    }
+
+    async def stream_audio():
+        async with httpx.AsyncClient(timeout=20) as client:
+            async with client.stream("POST", url, headers=headers, json=payload) as resp:
+                if resp.status_code != 200:
+                    return
+                async for chunk in resp.aiter_bytes(chunk_size=4096):
+                    yield chunk
+
+    return StreamingResponse(stream_audio(), media_type="audio/mpeg")
+
+
+@app.post("/ai/clean-transcript")
+async def clean_transcript(req: CleanRequest):
+    """
+    Takes a raw speech transcript and returns a cleaned version.
+    Removes filler words, fixes broken sentences, preserves meaning.
+    """
+    from gemini_client import gemini_text
+    if not req.text or len(req.text.strip()) < 20:
+        return {"cleaned": req.text, "changed": False}
+
+    prompt = (
+        f"Clean up this speech transcript. Remove filler words (um, uh, like, basically, "
+        f"kind of, sort of, you know). Fix sentence structure. Preserve all meaning and "
+        f"specific details. Keep it in first person. Return only the cleaned text, nothing else.\n\n"
+        f"Transcript: {req.text}"
+    )
+    cleaned = gemini_text(prompt)
+    if cleaned and cleaned != req.text:
+        return {"cleaned": cleaned, "changed": True}
+    return {"cleaned": req.text, "changed": False}

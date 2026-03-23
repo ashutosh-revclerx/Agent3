@@ -20,7 +20,14 @@ const api = async (path, options = {}) => {
     },
     ...options,
   });
-  if (!res.ok) throw new Error(`API error ${res.status}`);
+  if (!res.ok) {
+    let message = `API error ${res.status}`;
+    try {
+      const data = await res.json();
+      message = data?.detail || data?.message || message;
+    } catch {}
+    throw new Error(message);
+  }
   return res.json();
 };
 
@@ -38,7 +45,7 @@ function App() {
   const [participant, setParticipant] = useState(null);
   const [role, setRole] = useState(null); // 'host' | 'participant'
 
-  const shared = { api, getWsBase, session, participant, mode: role };
+  const shared = { api, apiBase: API_BASE, getWsBase, session, participant, mode: role };
 
   const renderPhase = () => {
     switch (phase) {

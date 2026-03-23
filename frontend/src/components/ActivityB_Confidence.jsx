@@ -27,15 +27,16 @@ function ActivityB_Confidence({ api, getWsBase, session, participant, mode, onCo
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    if (profile && session) {
-      const ws = new WebSocket(`${getWsBase()}/ws/${session.code}`);
-      ws.onmessage = (e) => {
+    if (!session?.code) return;
+    const ws = new WebSocket(`${getWsBase()}/ws/${session.code}?participant_id=${participant?.id || 'host'}`);
+    ws.onmessage = (e) => {
+      try {
         const msg = JSON.parse(e.data);
         if (msg.type === 'team_confidence_profile') setProfile(msg.data);
-      };
-      return () => ws.close();
-    }
-  }, [profile, session]);
+      } catch {}
+    };
+    return () => ws.close();
+  }, [getWsBase, participant?.id, session?.code]);
 
   const toggleConcern = (id) => setConcerns(concerns.includes(id) ? concerns.filter(c => c !== id) : [...concerns, id]);
 

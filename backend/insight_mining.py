@@ -67,33 +67,93 @@ Rules:
     if result:
         return result
 
-    # ── Fallback ──
+    # ── Fallback (runs when GEMINI_API_KEY is not set) ──
+    # Match on label text since frontend now sends labels, not IDs
+    obj_text = " ".join(objectives).lower()
+    growth_text = " ".join(growth_areas).lower()
+
     clusters = []
-    if any(o in objectives for o in ['revenue', 'cx', 'scale']):
+
+    # Cluster 1 — Growth / commercial signals
+    growth_keywords = ["revenue", "growth", "market", "customer", "retention", "sales", "product", "innovation", "monetis"]
+    if any(k in obj_text or k in growth_text for k in growth_keywords):
+        obj_matches = [o for o in objectives if any(k in o.lower() for k in growth_keywords)]
         clusters.append({
-            "icon": "◆", "theme": "Growth & Customer Intelligence",
+            "icon": "◆",
+            "theme": "Growth & Customer Intelligence",
+            "signals": max(2, len(obj_matches) + 1),
+            "summary": (
+                f"{company} is prioritising revenue expansion and customer experience improvement. "
+                f"Growth is the dominant commercial driver this year, with {len(growth_areas)} growth "
+                f"priorities identified."
+            ),
+            "ai_potential": "AI-powered customer segmentation and automated personalised engagement across the funnel"
+        })
+
+    # Cluster 2 — Operational / tech signals
+    ops_keywords = ["efficiency", "operational", "automat", "manual", "data", "infrastructure", "velocity", "platform", "integration", "pipeline", "process"]
+    if any(k in obj_text or k in growth_text or k in challenges.lower() for k in ops_keywords):
+        clusters.append({
+            "icon": "◈",
+            "theme": "Operational & Technical Efficiency",
+            "signals": max(2, len([o for o in objectives if any(k in o.lower() for k in ops_keywords)])),
+            "summary": (
+                f"Manual processes and data silos are limiting {company}'s productivity. "
+                f"The team is spending significant time on work that AI tools can automate — "
+                f"particularly in the areas highlighted in the challenges described."
+            ),
+            "ai_potential": "Intelligent workflow automation with AI-generated dashboards and anomaly alerting"
+        })
+
+    # Cluster 3 — Risk / compliance signals
+    risk_keywords = ["risk", "compliance", "security", "governance", "legal", "regulation"]
+    if any(k in obj_text or k in growth_text for k in risk_keywords):
+        clusters.append({
+            "icon": "▣",
+            "theme": "Risk & Governance",
             "signals": 2,
-            "summary": f"{company} is prioritising revenue expansion and customer experience. Growth is the dominant strategic driver.",
-            "ai_potential": "AI-powered customer segmentation and personalised engagement automation"
+            "summary": (
+                f"{company} has identified compliance and risk management as strategic priorities. "
+                f"AI can reduce manual audit work and flag issues before they escalate."
+            ),
+            "ai_potential": "Automated compliance monitoring, contract review AI, and real-time risk alerting"
         })
-    if any(o in objectives for o in ['efficiency', 'talent', 'data']):
+
+    # Cluster 4 — Talent / people signals
+    people_keywords = ["talent", "people", "hr", "team", "workforce", "hiring", "productivity"]
+    if any(k in obj_text or k in growth_text for k in people_keywords):
         clusters.append({
-            "icon": "◈", "theme": "Operational Efficiency",
-            "signals": 3,
-            "summary": "Manual processes and data silos are limiting productivity. Teams are spending time on work that AI can automate.",
-            "ai_potential": "Intelligent workflow automation with real-time performance dashboards"
+            "icon": "◉",
+            "theme": "Talent & Workforce Productivity",
+            "signals": 2,
+            "summary": (
+                f"People productivity and talent development are strategic priorities for {company}. "
+                f"AI can reduce administrative overhead and free teams for higher-value work."
+            ),
+            "ai_potential": "AI-assisted onboarding, performance insight dashboards, and automated HR reporting"
         })
+
+    # Default if nothing matched
     if not clusters:
         clusters.append({
-            "icon": "◎", "theme": "Strategic AI Readiness",
-            "signals": 1,
-            "summary": f"{company} is beginning to map where AI can create most value. This workshop will build that clarity.",
-            "ai_potential": "Targeted AI pilots in highest-friction workflows identified today"
+            "icon": "◎",
+            "theme": "Strategic AI Readiness",
+            "signals": len(objectives) + len(growth_areas),
+            "summary": (
+                f"{company} is mapping where AI can create the most value across its operations. "
+                f"This workshop will prioritise the highest-impact, lowest-effort opportunities first."
+            ),
+            "ai_potential": "Targeted AI pilots in the highest-friction workflows identified today"
         })
-    return {
-        "dominant_theme": f"{company} is focused on {objectives[0] if objectives else 'operational improvement'} as its primary strategic driver.",
-        "clusters": clusters
-    }
+
+    # Build a readable dominant theme from actual objective labels
+    top_objectives = objectives[:2] if objectives else ["operational improvement"]
+    dominant = (
+        f"{company} is primarily focused on {' and '.join(top_objectives).lower()}, "
+        f"with {len(growth_areas)} growth priorities driving the agenda this year."
+    )
+
+    return {"dominant_theme": dominant, "clusters": clusters}
 
 
 # ─────────────────────────────────────────────────────────────────────────────

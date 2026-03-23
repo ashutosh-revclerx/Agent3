@@ -8,11 +8,13 @@ Install: pip install google-genai
 Docs:    https://googleapis.github.io/python-genai/
 """
 import os, json, re
+from pathlib import Path
 from google import genai
 from google.genai import types
 from dotenv import load_dotenv
 
-load_dotenv()
+ENV_PATH = Path(__file__).resolve().parent / ".env"
+load_dotenv(ENV_PATH)
 
 # ── Singleton client ──────────────────────────────────────────────────────────
 _client: genai.Client | None = None

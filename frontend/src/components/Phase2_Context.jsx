@@ -1,3 +1,5 @@
+import VoiceTextInput from './Voicetextinput'
+import AgentChat from './Agentchat'
 import { useState, useEffect, useRef } from 'react'
 import './phases.css'
 
@@ -365,7 +367,7 @@ export default function Phase2_Context({ api, getWsBase, session, participant, o
           participant_role: role,
           objectives: objectives.map(id => {
             const found = allObjectives.find(o => o.id === id)
-            return found?.custom ? `custom:${found.label}` : id
+            return found ? found.label : id
           }),
           growth_areas: growthAreas,
           challenges:      challenges.trim(),
@@ -548,25 +550,26 @@ export default function Phase2_Context({ api, getWsBase, session, participant, o
           <div className="fade-up">
             <div className="phase-title-block">
               <p className="badge badge-accent">Step 3 of 3</p>
-              <h2 className="phase-title">{config.challengePrompt}</h2>
-              <p className="phase-desc">{config.challengeHint}</p>
+              <h2 className="phase-title">One question<br />from the AI</h2>
+              <p className="phase-desc">The agent will ask you a tailored question based on your {role} role. Answer in your own words.</p>
             </div>
 
             <div className="phase-form">
-              <div className="input-group">
-                <label>Your answer (minimum 20 characters)</label>
-                <textarea
-                  className="input"
-                  rows={5}
-                  placeholder="Be specific — the more detail you give, the more precisely the AI can identify relevant use cases for your role."
-                  value={challenges}
-                  onChange={e => setChallenges(e.target.value)}
-                  style={{ resize: 'vertical' }}
-                />
-                <div style={{ textAlign: 'right', fontSize: 11, color: 'var(--text-3)', marginTop: 4 }}>
-                  {challenges.length} characters
-                </div>
-              </div>
+              <AgentChat
+                key={role}
+                questions={[{
+                  id: 'challenge',
+                  question: config.challengePrompt,
+                  hint: config.challengeHint,
+                  placeholder: 'Describe it in your own words — the more specific, the better.',
+                  field: 'challenges',
+                  required: true,
+                }]}
+                agentName="Insight Mining Agent"
+                agentAvatar="◈"
+                apiBase={window.__API_BASE__ || ''}
+                onComplete={(answers) => setChallenges(answers.challenges || '')}
+              />
 
               {/* Summary of selections */}
               <div className="summary-card">
