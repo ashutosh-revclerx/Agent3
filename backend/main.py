@@ -121,9 +121,16 @@ class PromptRequest(BaseModel):
     session_code: str;  participant_id: Optional[str] = None
     prompt: str;  task_context: str = ""
 
+class ScenarioRequest(BaseModel):
+    session_code: str
+    participant_id: Optional[str] = None
+    role: str
+    department: str
+
 class SimulationRequest(BaseModel):
     session_code: str;  participant_id: Optional[str] = None
     prompt: str;  task_context: str = ""
+    scenario: Optional[dict] = None
 
 class VoteRequest(BaseModel):
     session_code: str;  participant_id: Optional[str] = None
@@ -229,42 +236,50 @@ async def join_participant(req: JoinRequest):
 # ─────────────────────────────────────────────────────────────────────────────
 @app.post("/phase/context")
 async def submit_context(req: Phase2Request):
-    code = req.session_code.upper()
-    if code not in sessions: raise HTTPException(404, "Session not found")
-    s = sessions[code]
-
-    store(code, "phase2", {
-        "participant_id":   req.participant_id,
-        "participant_role": req.participant_role,
-        "objectives":       req.objectives,
-        "growth_areas":     req.growth_areas,
-        "challenges":       req.challenges,
-    })
-    await broadcast(code, {"type": "context_count", "count": len(get_store(code, "phase2"))})
-
-    # Agent 2 (guarded to avoid 500s if LLM fails)
     try:
-        objective_map = insight_mining.build_objective_map(
-            s["company"], s["industry"], req.objectives, req.growth_areas,
-            req.challenges, session=s, participant_role=req.participant_role
-        )
-    except Exception as e:
-        print(f"build_objective_map error: {e}")
-        objective_map = {
-            "dominant_theme": f"{s['company']} focus areas",
-            "clusters": [{
-                "icon": "◆",
-                "theme": "Operational Priorities",
-                "signals": len(req.objectives) or 1,
-                "summary": req.challenges[:200] or "Collecting workshop context.",
-                "ai_potential": "AI-assisted workflow automation and insight dashboards"
-            }]
-        }
-    s["workshop_data"]["objective_map"] = objective_map
+        if not req.session_code:
+            raise HTTPException(400, "session_code is required")
+        code = req.session_code.upper()
+        if code not in sessions: raise HTTPException(404, "Session not found")
+        s = sessions[code]
 
-    # Agent 1: phase intro for phase 3
-    transition = facilitator.get_transition_message("Business Context", "Problem Discovery", s["company"])
-    return {"objective_map": objective_map, "transition_message": transition}
+        store(code, "phase2", {
+            "participant_id":   req.participant_id,
+            "participant_role": req.participant_role,
+            "objectives":       req.objectives,
+            "growth_areas":     req.growth_areas,
+            "challenges":       req.challenges,
+        })
+        await broadcast(code, {"type": "context_count", "count": len(get_store(code, "phase2"))})
+
+        # Agent 2 (guarded)
+        try:
+            objective_map = insight_mining.build_objective_map(
+                s["company"], s["industry"], req.objectives, req.growth_areas,
+                req.challenges, session=s, participant_role=req.participant_role or "Other"
+            )
+        except Exception as e:
+            print(f"build_objective_map error: {e}")
+            objective_map = {
+                "dominant_theme": f"{s['company']} focus areas",
+                "clusters": [{
+                    "icon": "◆",
+                    "theme": "Operational Priorities",
+                    "signals": len(req.objectives) or 1,
+                    "summary": req.challenges[:200] or "Collecting workshop context.",
+                    "ai_potential": "AI-assisted workflow automation and insight dashboards"
+                }]
+            }
+        s["workshop_data"]["objective_map"] = objective_map
+
+        # Agent 1: phase intro for phase 3
+        transition = facilitator.get_transition_message("Business Context", "Problem Discovery", s["company"])
+        return {"objective_map": objective_map, "transition_message": transition}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"/phase/context error: {e}")
+        raise HTTPException(500, "Phase 2 processing failed") from e
 
 
 # HOST: reveal Phase 2 results to participants
@@ -406,6 +421,25 @@ async def submit_confidence(req: ConfidenceRequest):
 # ─────────────────────────────────────────────────────────────────────────────
 # Activity C — Prompt Engineering  [Agent 3: Prompt Coaching]
 # ─────────────────────────────────────────────────────────────────────────────
+@app.post("/activity/prompt-scenario")
+async def generate_scenario(req: ScenarioRequest):
+    """Activity C Step 0 — generate a role-specific scenario before the user writes their prompt."""
+    code = req.session_code.upper()
+    if code not in sessions:
+        raise HTTPException(404, "Session not found")
+    s = sessions[code]
+
+    scenario = prompt_coaching.generate_scenario(
+        role=req.role,
+        department=req.department,
+        company=s["company"],
+        industry=s["industry"],
+    )
+    # Tag with role so simulation can use it later
+    scenario["role"] = req.role
+    return scenario
+
+
 @app.post("/activity/prompt-engineering")
 async def score_prompt(req: PromptRequest):
     code = req.session_code.upper()
@@ -413,10 +447,16 @@ async def score_prompt(req: PromptRequest):
     s    = sessions[code]
     conf = s.get("team_confidence", {}).get("avg_confidence", 3)
 
+    # scenario_id can be sent from frontend to fetch the cached scenario
+    scenario = None
+    if hasattr(req, 'scenario_id') and req.scenario_id:
+        scenario = s.get("cached_scenarios", {}).get(req.scenario_id)
+
     result = prompt_coaching.score_and_improve(
         req.prompt, req.task_context,
         s["company"], s["industry"],
-        confidence_level=round(conf)
+        confidence_level=round(conf),
+        scenario=scenario,
     )
     store(code, "activity_c", {"participant_id": req.participant_id, "original": req.prompt, "result": result})
     return result
@@ -429,7 +469,8 @@ async def run_simulation(req: SimulationRequest):
     s = sessions[code]
 
     result = prompt_coaching.run_simulation(
-        req.prompt, req.task_context, s["company"], s["industry"]
+        req.prompt, req.task_context, s["company"], s["industry"],
+        scenario=req.scenario,
     )
     return result
 

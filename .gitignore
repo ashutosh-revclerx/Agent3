@@ -9,12 +9,18 @@ __pycache__/
 .venv
 venv/
 ENV/
+.mypy_cache/
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
 
 # Build outputs
 dist/
 build/
 .next/
 out/
+.vite/
 
 # Environment variables
 .env
@@ -39,3 +45,6 @@ Thumbs.db
 # Documentation/Artifacts (if you want to keep them local)
 brain/
 tmp/
+
+# Local scratch scripts
+do.py

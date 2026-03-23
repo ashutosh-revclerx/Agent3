@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import '../styles/phases.css'
+import './phases.css'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ROLE-BASED QUESTION SETS
@@ -277,11 +277,49 @@ export default function Phase2_Context({ api, getWsBase, session, participant, o
   const [objectives,  setObjectives]  = useState([])
   const [growthAreas, setGrowthAreas] = useState([])
   const [challenges,  setChallenges]  = useState('')
-  const [submitting,  setSubmitting]  = useState(false)
-  const [error,       setError]       = useState(null)
-  const [insights,    setInsights]    = useState(null)
-  const [liveCount,   setLiveCount]   = useState(1)
+  const [submitting,       setSubmitting]       = useState(false)
+  const [error,            setError]            = useState(null)
+  const [insights,         setInsights]         = useState(null)
+  const [liveCount,        setLiveCount]        = useState(1)
+  // custom "other" entries
+  const [customObjective,  setCustomObjective]  = useState('')
+  const [customObjectives, setCustomObjectives] = useState([])
+  const [showObjInput,     setShowObjInput]     = useState(false)
+  const [customGrowth,     setCustomGrowth]     = useState('')
+  const [customGrowths,    setCustomGrowths]    = useState([])
+  const [showGrowthInput,  setShowGrowthInput]  = useState(false)
   const wsRef = useRef(null)
+
+  // ── Custom objective helpers ─────────────────────────────────────────────
+  const addCustomObjective = () => {
+    const val = customObjective.trim()
+    if (val.length < 3) return
+    const id = `custom_obj_${Date.now()}`
+    setCustomObjectives(prev => [...prev, { id, label: val, icon: '◇', desc: 'Custom', custom: true }])
+    setObjectives(prev => [...prev, id])
+    setCustomObjective('')
+    setShowObjInput(false)
+  }
+  const removeCustomObjective = (id) => {
+    setCustomObjectives(prev => prev.filter(o => o.id !== id))
+    setObjectives(prev => prev.filter(x => x !== id))
+  }
+
+  // ── Custom growth helpers ────────────────────────────────────────────────
+  const addCustomGrowth = () => {
+    const val = customGrowth.trim()
+    if (val.length < 3) return
+    setCustomGrowths(prev => [...prev, val])
+    setGrowthAreas(prev => [...prev, val])
+    setCustomGrowth('')
+    setShowGrowthInput(false)
+  }
+  const removeCustomGrowth = (g) => {
+    setCustomGrowths(prev => prev.filter(x => x !== g))
+    setGrowthAreas(prev => prev.filter(x => x !== g))
+  }
+
+  const allObjectives = [...config.objectives, ...customObjectives]
 
   // WebSocket
   useEffect(() => {
@@ -325,8 +363,11 @@ export default function Phase2_Context({ api, getWsBase, session, participant, o
           session_code:    session.code,
           participant_id:  participant?.id,
           participant_role: role,
-          objectives,
-          growth_areas:    growthAreas,
+          objectives: objectives.map(id => {
+            const found = allObjectives.find(o => o.id === id)
+            return found?.custom ? `custom:${found.label}` : id
+          }),
+          growth_areas: growthAreas,
           challenges:      challenges.trim(),
         }),
       })
@@ -394,20 +435,53 @@ export default function Phase2_Context({ api, getWsBase, session, participant, o
             </div>
 
             <div className="objective-grid">
-              {config.objectives.map(obj => (
+              {allObjectives.map(obj => (
                 <button
                   key={obj.id}
                   className={`objective-card ${objectives.includes(obj.id) ? 'selected' : ''}`}
                   onClick={() => toggleObjective(obj.id)}
                   type="button"
                 >
-                  <span className="obj-icon">{obj.icon}</span>
+                  <div className="obj-top-row">
+                    <span className="obj-icon">{obj.icon}</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                      {obj.custom && (
+                        <span
+                          style={{ fontSize: 11, color: 'var(--text-3)', cursor: 'pointer', padding: '0 2px' }}
+                          onClick={e => { e.stopPropagation(); removeCustomObjective(obj.id) }}
+                          title="Remove"
+                        >✕</span>
+                      )}
+                      <span className="obj-check">{objectives.includes(obj.id) ? '✓' : ''}</span>
+                    </div>
+                  </div>
                   <span className="obj-label">{obj.label}</span>
-                  <span className="obj-desc">{obj.desc}</span>
-                  <span className="obj-check">{objectives.includes(obj.id) ? '✓' : ''}</span>
+                  <span className="obj-desc">{obj.custom ? 'Custom objective' : obj.desc}</span>
                 </button>
               ))}
             </div>
+
+            {/* Add custom objective */}
+            {showObjInput ? (
+              <div className="custom-add-row">
+                <input
+                  className="input custom-add-input"
+                  placeholder="Describe your objective..."
+                  value={customObjective}
+                  onChange={e => setCustomObjective(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') addCustomObjective(); if (e.key === 'Escape') setShowObjInput(false) }}
+                  autoFocus
+                  maxLength={60}
+                />
+                <button className="btn btn-primary btn-sm" onClick={addCustomObjective} disabled={customObjective.trim().length < 3} type="button">Add</button>
+                <button className="btn btn-ghost btn-sm" onClick={() => { setShowObjInput(false); setCustomObjective('') }} type="button">✕</button>
+              </div>
+            ) : (
+              <button className="custom-add-trigger" onClick={() => setShowObjInput(true)} type="button">
+                + Add your own objective
+              </button>
+            )}
+
             <div className="selected-count">{objectives.length} selected</div>
           </div>
         )}
@@ -433,7 +507,39 @@ export default function Phase2_Context({ api, getWsBase, session, participant, o
                   <span className="growth-label">{g}</span>
                 </button>
               ))}
+              {customGrowths.map(g => (
+                <div key={g} className={`growth-item selected custom-growth-item`}>
+                  <span className="growth-check">✓</span>
+                  <span className="growth-label" style={{ flex: 1 }}>{g}</span>
+                  <button
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 11, color: 'var(--text-3)', padding: '0 4px', flexShrink: 0 }}
+                    onClick={() => removeCustomGrowth(g)}
+                    type="button"
+                    title="Remove"
+                  >✕</button>
+                </div>
+              ))}
             </div>
+
+            {showGrowthInput ? (
+              <div className="custom-add-row">
+                <input
+                  className="input custom-add-input"
+                  placeholder="Describe your growth priority..."
+                  value={customGrowth}
+                  onChange={e => setCustomGrowth(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') addCustomGrowth(); if (e.key === 'Escape') setShowGrowthInput(false) }}
+                  autoFocus
+                  maxLength={80}
+                />
+                <button className="btn btn-primary btn-sm" onClick={addCustomGrowth} disabled={customGrowth.trim().length < 3} type="button">Add</button>
+                <button className="btn btn-ghost btn-sm" onClick={() => { setShowGrowthInput(false); setCustomGrowth('') }} type="button">✕</button>
+              </div>
+            ) : (
+              <button className="custom-add-trigger" onClick={() => setShowGrowthInput(true)} type="button">
+                + Add your own priority
+              </button>
+            )}
           </div>
         )}
 
@@ -467,14 +573,26 @@ export default function Phase2_Context({ api, getWsBase, session, participant, o
                 <p className="summary-title">Your selections</p>
                 <div className="summary-chips">
                   {objectives.map(id => {
-                    const o = config.objectives.find(x => x.id === id)
-                    return <span key={id} className="chip">{o?.icon} {o?.label}</span>
+                    const o = allObjectives.find(x => x.id === id)
+                    if (!o) return null
+                    return (
+                      <span key={id} className={`chip${o.custom ? ' chip-custom' : ''}`}>
+                        {o.icon} {o.label}
+                        {o.custom && <span style={{ fontSize: 9, marginLeft: 4, opacity: 0.7 }}>custom</span>}
+                      </span>
+                    )
                   })}
                 </div>
                 <div className="summary-chips" style={{ marginTop: 8 }}>
-                  {growthAreas.map(g => (
-                    <span key={g} className="chip chip-green">{g}</span>
-                  ))}
+                  {growthAreas.map(g => {
+                    const isCustom = customGrowths.includes(g)
+                    return (
+                      <span key={g} className={`chip chip-green${isCustom ? ' chip-custom' : ''}`}>
+                        {g}
+                        {isCustom && <span style={{ fontSize: 9, marginLeft: 4, opacity: 0.7 }}>custom</span>}
+                      </span>
+                    )
+                  })}
                 </div>
               </div>
 
