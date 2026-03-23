@@ -93,7 +93,7 @@ export default function AgentChat({
       setTimeout(() => {
         setMessages(prev => [...prev, {
           type: 'agent',
-          text: 'Perfect ” I have everything I need. Thanks for sharing all of that.',
+          text: 'Perfect — I have everything I need. Thanks for sharing all of that.',
           id: nextId(),
         }])
         setDone(true)

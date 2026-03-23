@@ -92,6 +92,7 @@ class CreateSessionRequest(BaseModel):
 class JoinRequest(BaseModel):
     session_code: str;  name: str;  role: str
     department: str;  top_challenge: str;  ai_confidence: int
+    daily_work: str = ""
 
 class Phase2Request(BaseModel):
     session_code:     str
@@ -233,7 +234,7 @@ async def join_participant(req: JoinRequest):
     p = {
         "id": str(uuid.uuid4()), "session_code": code,
         "name": req.name, "role": req.role, "department": req.department,
-        "top_challenge": req.top_challenge, "ai_confidence": req.ai_confidence,
+        "top_challenge": req.top_challenge, "daily_work": req.daily_work, "ai_confidence": req.ai_confidence,
         "joined_at": datetime.datetime.utcnow().isoformat(),
     }
     sessions[code]["participants"].append(p["id"])

@@ -40,6 +40,7 @@ export default function Phase1_Onboarding({ api, apiBase, session, role, onCompl
 
   const [chatDone, setChatDone] = useState(false)
   const [topChallenge, setTopChallenge] = useState('')
+  const [dailyWork, setDailyWork] = useState('')
 
   const handleCodeSubmit = async () => {
     if (!sessionCode.trim()) return
@@ -71,6 +72,7 @@ export default function Phase1_Onboarding({ api, apiBase, session, role, onCompl
           role: selectedRole,
           department,
           top_challenge: topChallenge,
+          daily_work: dailyWork,
           ai_confidence: 3,
         }),
       })
@@ -84,14 +86,24 @@ export default function Phase1_Onboarding({ api, apiBase, session, role, onCompl
 
   const chatQuestions = useMemo(() => (
     selectedRole
-      ? [{
-          id: 'challenge',
-          question: CHALLENGE_QUESTION[selectedRole] || CHALLENGE_QUESTION.Other,
-          hint: CHALLENGE_HINT[selectedRole] || CHALLENGE_HINT.default,
-          placeholder: 'Describe it in your own words - specific examples help most.',
-          field: 'top_challenge',
-          required: true,
-        }]
+      ? [
+          {
+            id: 'daily_work',
+            question: 'What is the most time-consuming or repetitive part of your daily work?',
+            hint: 'Think about manual reporting, data entry, email processing, or coordinating across systems.',
+            placeholder: 'Briefly describe your main daily activities.',
+            field: 'daily_work',
+            required: true,
+          },
+          {
+            id: 'challenge',
+            question: CHALLENGE_QUESTION[selectedRole] || CHALLENGE_QUESTION.Other,
+            hint: CHALLENGE_HINT[selectedRole] || CHALLENGE_HINT.default,
+            placeholder: 'Describe it in your own words - specific examples help most.',
+            field: 'top_challenge',
+            required: true,
+          }
+        ]
       : []
   ), [selectedRole])
 
@@ -196,6 +208,7 @@ export default function Phase1_Onboarding({ api, apiBase, session, role, onCompl
                     apiBase={apiBase}
                     onComplete={(answers) => {
                       setTopChallenge(answers.top_challenge || '')
+                      setDailyWork(answers.daily_work || '')
                       setChatDone(true)
                     }}
                   />
