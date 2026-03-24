@@ -26,6 +26,7 @@ const MIC_STATES = { idle: 'idle', recording: 'recording', processing: 'processi
 export default function VoiceTextInput({
   value = '',
   onChange,
+  onKeyDown,
   placeholder = 'Type your answer, or tap the mic to speak...',
   rows = 4,
   label,
