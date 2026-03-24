@@ -15,30 +15,17 @@ const SEVERITY_LABELS = {
   5: { label: 'Critical blocker',    color: 'var(--red)' },
 }
 
-// Role-specific workflow placeholder text
-const WORKFLOW_PLACEHOLDERS = {
-  'CEO / Founder':           'e.g. Every board meeting I ask 3 different teams for the same KPIs. Each team pulls data differently, we spend 2 days reconciling numbers before I can present...',
-  'CTO / Technology Leader': 'e.g. When a bug reaches production, I manually check 4 dashboards, cross-reference logs in two systems, then post a Slack update every 30 minutes until resolved...',
-  'COO / Operations':        'e.g. Each week I export a report from the ERP, paste it into Excel, manually add columns from a second system, then format it into the ops review template...',
-  'Product Manager':         'e.g. For each feature release I create a Jira ticket, write a Confluence spec, copy key details into a Slack channel, then re-enter delivery dates into a roadmap spreadsheet...',
-  'Data / AI Engineer':      'e.g. Every morning I check 3 pipeline dashboards, manually re-run failed jobs, document the failure in a Google Sheet, then notify stakeholders via email...',
-  'Business Analyst':        'e.g. Monthly reporting: I download 5 CSV exports, open each in Excel, clean the data, use VLOOKUP to join them, then manually build the charts in PowerPoint...',
-  'Department Head':         'e.g. To approve a purchase I receive an email, check the budget spreadsheet, reply with approval, then separately notify finance by filling in a web form...',
-  'Consultant':              'e.g. For every client engagement I copy-paste the scope template, manually update all company-specific references, then recreate the same slide structure from scratch...',
-  'Other':                   'e.g. Every Monday I open 3 spreadsheets, copy last week\'s numbers into a master sheet, manually calculate the totals, then paste them into a slide for the 9am review...',
-}
-
-const DEFAULT_PLACEHOLDER = WORKFLOW_PLACEHOLDERS['Other']
 
 export default function Phase3_Problems({ api, getWsBase, session, participant, onComplete }) {
   const role = participant?.role || 'Other'
-  const workflowPlaceholder = WORKFLOW_PLACEHOLDERS[role] || DEFAULT_PLACEHOLDER
+  // Use the LLM-summarised workflow from onboarding; fall back to raw daily_work
+  const onboardingWorkflow = participant?.workflow_summary || participant?.daily_work || ''
 
   const [step,         setStep]         = useState('submit')
   const [problems,     setProblems]     = useState([
     { id: 1, text: '', tags: [], severity: 3,
       department: participant?.department || '',
-      workflow_description: '' },
+      workflow_description: participant?.workflow_summary || participant?.daily_work || '' },
   ])
   const [liveProblems, setLiveProblems] = useState([])
   const [clusters,     setClusters]    = useState(null)
@@ -81,7 +68,7 @@ export default function Phase3_Problems({ api, getWsBase, session, participant, 
     setProblems(ps => [...ps, {
       id: Date.now(), text: '', tags: [], severity: 3,
       department: participant?.department || '',
-      workflow_description: '',
+      workflow_description: participant?.workflow_summary || participant?.daily_work || '',
     }])
   }
 
@@ -113,8 +100,6 @@ export default function Phase3_Problems({ api, getWsBase, session, participant, 
     }
   }
 
-  // How many problems have a workflow filled in
-  const workflowCount = validProblems.filter(p => p.workflow_description?.trim().length > 10).length
 
   return (
     <div className="phase-shell fade-up">
@@ -153,8 +138,8 @@ export default function Phase3_Problems({ api, getWsBase, session, participant, 
               <p className="badge badge-accent">Problem Identification</p>
               <h2 className="phase-title">What slows your<br />team down the most?</h2>
               <p className="phase-desc">
-                Describe up to 5 problems. For each one, walk us through
-                your current workflow — this helps the AI identify exactly
+                Describe up to 5 problems. Your workflow from onboarding
+                has been carried over automatically to help the AI identify
                 which steps can be automated.
               </p>
             </div>
@@ -228,30 +213,27 @@ export default function Phase3_Problems({ api, getWsBase, session, participant, 
                     </div>
                   </div>
 
-                  {/* ── WORKFLOW FIELD ── */}
-                  <div className="workflow-field">
-                    <div className="workflow-field-header">
-                      <span className="tag-label">Your current workflow</span>
-                      <span className="workflow-optional">optional — but helps the AI spot automation points</span>
-                    </div>
-                    <textarea
-                      className="input workflow-textarea"
-                      rows={3}
-                      placeholder={workflowPlaceholder}
-                      value={problem.workflow_description}
-                      onChange={e => updateProblem(problem.id, 'workflow_description', e.target.value)}
-                      style={{ resize: 'vertical' }}
-                    />
-                    {problem.workflow_description?.trim().length > 10 && (
-                      <div className="workflow-steps-preview">
-                        {detectSteps(problem.workflow_description).map((step, i) => (
-                          <span key={i} className="workflow-step-chip">
-                            {i + 1}. {step}
-                          </span>
-                        ))}
+                  {/* Workflow pre-filled from onboarding — shown read-only if present */}
+                  {onboardingWorkflow && (
+                    <div className="workflow-field">
+                      <div className="workflow-field-header">
+                        <span className="tag-label">Your workflow (from onboarding)</span>
+                        <span className="workflow-optional">carried over automatically</span>
                       </div>
-                    )}
-                  </div>
+                      <div className="workflow-readonly">
+                        {onboardingWorkflow}
+                      </div>
+                      {detectSteps(onboardingWorkflow).length > 0 && (
+                        <div className="workflow-steps-preview">
+                          {detectSteps(onboardingWorkflow).map((s, i) => (
+                            <span key={i} className="workflow-step-chip">
+                              {i + 1}. {s}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                 </div>
               ))}
@@ -263,16 +245,6 @@ export default function Phase3_Problems({ api, getWsBase, session, participant, 
               </button>
             )}
 
-            {/* Workflow fill-in nudge */}
-            {validProblems.length > 0 && workflowCount === 0 && (
-              <div className="workflow-nudge">
-                <span className="workflow-nudge-icon">◈</span>
-                <span className="workflow-nudge-text">
-                  Adding your current workflow helps the AI identify exactly
-                  which steps can be automated — not just that the problem exists.
-                </span>
-              </div>
-            )}
 
             {error && <div className="error-banner">⚠ {error}</div>}
           </div>

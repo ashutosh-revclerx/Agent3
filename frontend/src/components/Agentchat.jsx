@@ -183,7 +183,7 @@ export default function AgentChat({
           // Collect whatever we have so far from the conversation
           const agentMsgs = messages.filter(m => m.type === 'agent').map(m => m.text).join(' ')
           const userMsgs = messages.filter(m => m.type === 'user').map(m => m.text).join(' ')
-          onComplete({ daily_work: userMsgs, top_challenge: '' })
+          onComplete({ daily_work: userMsgs, top_challenge: '', _conversation: [...messages, { type: 'user', text: val }] })
         }, 800)
       }, 400)
       return
@@ -207,7 +207,7 @@ export default function AgentChat({
             pushAgentMessage(closingMsg, null, true)
             setTimeout(() => {
               setDone(true)
-              onComplete(data.extracted_data || newAnswers)
+              onComplete({ ...(data.extracted_data || newAnswers), _conversation: [...messages, { type: 'user', text: val }] })
             }, 1000)
           }, 600)
         } else {
@@ -246,7 +246,7 @@ export default function AgentChat({
         pushAgentMessage('Perfect — I have everything I need. Thanks for sharing all of that.', null, true)
         setDone(true)
         setSubmitting(false)
-        onComplete(newAnswers)
+        onComplete({ ...newAnswers, _conversation: [...messages, { type: 'user', text: val }] })
       }, 600)
     }
   }

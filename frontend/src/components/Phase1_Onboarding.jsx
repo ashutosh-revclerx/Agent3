@@ -41,6 +41,7 @@ export default function Phase1_Onboarding({ api, apiBase, session, role, onCompl
   const [chatDone, setChatDone] = useState(false)
   const [topChallenge, setTopChallenge] = useState('')
   const [dailyWork, setDailyWork] = useState('')
+  const [conversation, setConversation] = useState([])
 
   const handleCodeSubmit = async () => {
     if (!sessionCode.trim()) return
@@ -74,6 +75,7 @@ export default function Phase1_Onboarding({ api, apiBase, session, role, onCompl
           top_challenge: topChallenge,
           daily_work: dailyWork,
           ai_confidence: 3,
+          conversation: conversation.map(m => ({ role: m.type === 'user' ? 'user' : 'agent', text: m.text })),
         }),
       })
       onComplete(data)
@@ -266,8 +268,10 @@ export default function Phase1_Onboarding({ api, apiBase, session, role, onCompl
                       }
                     }}
                     onComplete={(answers) => {
-                      setTopChallenge(answers.top_challenge || '')
-                      setDailyWork(answers.daily_work || '')
+                      const { _conversation, ...fields } = answers
+                      setTopChallenge(fields.top_challenge || '')
+                      setDailyWork(fields.daily_work || '')
+                      setConversation(_conversation || [])
                       setChatDone(true)
                     }}
                   />

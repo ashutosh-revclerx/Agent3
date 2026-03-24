@@ -76,7 +76,20 @@ export default function ActivityC_PromptEngineering({ api, apiBase, session, par
   const handleRunSimulation = async () => {
     setSimRunning(true)
     setError(null)
+    // Move to simulation step immediately so the thinking spinner shows
+    setStep('simulation')
     try {
+      // Strip scenario to plain serialisable fields only — avoids JSON issues
+      const safeScenario = scenario ? {
+        id:              scenario.id,
+        title:           scenario.title,
+        situation:       scenario.situation,
+        task:            scenario.task,
+        data_available:  scenario.data_available,
+        expected_output: scenario.expected_output,
+        role:            scenario.role,
+      } : null
+
       const result = await api('/activity/prompt-simulation', {
         method: 'POST',
         body: JSON.stringify({
@@ -84,13 +97,16 @@ export default function ActivityC_PromptEngineering({ api, apiBase, session, par
           participant_id: participant?.id,
           prompt:         scored?.improved_prompt || prompt.trim(),
           task_context:   scenario?.situation || '',
-          scenario:       scenario,
+          scenario:       safeScenario,
         }),
       })
+
+      if (!result?.output) throw new Error('Simulation returned no output. Check your backend logs.')
       setSimulation(result)
-      setStep('simulation')
     } catch (err) {
-      setError(err.message || 'Could not run simulation.')
+      // Step back to scored so user can retry
+      setStep('scored')
+      setError(err.message || 'Could not run simulation. Please try again.')
     } finally {
       setSimRunning(false)
     }

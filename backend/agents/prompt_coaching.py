@@ -11,7 +11,8 @@ Responsibility:
 
 Activated: Exclusively during Activity C
 """
-from gemini_client import gemini_json, gemini_text
+from gemini_client import gemini_json, gemini_text, get_client
+from google.genai import types
 import uuid
 
 CONFIDENCE_FEEDBACK_TONE = {
@@ -245,45 +246,63 @@ def run_simulation(improved_prompt: str, task_context: str,
                    scenario: dict = None) -> dict:
     """
     Runs a live simulation using the improved prompt.
+    Uses a dedicated high-token Gemini call so the output is never truncated.
     The scenario provides realistic fictional data for the simulation.
     """
+    time_map = {
+        "CEO / Founder":           "Saves ~45 minutes of manual analysis before a board meeting",
+        "CTO / Technology Leader": "Saves ~2 hours of log analysis — incident resolved before stakeholders notice",
+        "COO / Operations":        "Saves ~90 minutes of spreadsheet work across 3 systems",
+        "Product Manager":         "Saves ~3 hours of manual feedback categorisation",
+        "Data / AI Engineer":      "Saves ~1 hour of debugging — root cause found before 9am standup",
+        "Business Analyst":        "Saves ~2 hours of reconciliation work, delivered in under 2 minutes",
+        "Department Head":         "Saves ~2.5 hours of prep — 8 structured notes instead of blank page",
+        "Consultant":              "Saves ~3 hours of research — credible first-pass assessment in minutes",
+    }
+
     scenario_data = ""
-    time_saved    = None
+    time_saved = None
 
     if scenario:
-        scenario_data = f"""
-Scenario context for this simulation:
-{scenario.get('situation', '')}
+        data_list = "\n".join(f"- {d}" for d in scenario.get("data_available", []))
+        scenario_data = (
+            f"\n\nScenario context:\n"
+            f"{scenario.get('situation', '')}\n\n"
+            f"Data available to the user:\n{data_list}\n\n"
+            f"Invent realistic but clearly fictional sample data that matches what "
+            f"this person would actually have. Make the output feel genuinely useful and complete."
+        )
+        time_saved = time_map.get(scenario.get("role", ""), "Saves significant manual time for this workflow")
 
-Data you have available:
-{chr(10).join(f"- {d}" for d in scenario.get('data_available', []))}
-
-For this simulation, invent realistic but clearly fictional sample data that matches 
-what this person would actually have. Make the output feel genuinely useful."""
-
-        # Estimate time saving based on role
-        time_map = {
-            "CEO / Founder":           "Saves ~45 minutes of manual analysis before a board meeting",
-            "CTO / Technology Leader": "Saves ~2 hours of log analysis — incident resolved before stakeholders notice",
-            "COO / Operations":        "Saves ~90 minutes of spreadsheet work across 3 systems",
-            "Product Manager":         "Saves ~3 hours of manual feedback categorisation",
-            "Data / AI Engineer":      "Saves ~1 hour of debugging — root cause found before 9am standup",
-            "Business Analyst":        "Saves ~2 hours of reconciliation work, delivered in under 2 minutes",
-            "Department Head":         "Saves ~2.5 hours of prep — 8 structured notes instead of blank page",
-            "Consultant":              "Saves ~3 hours of research — credible first-pass assessment in minutes",
-        }
-        role = scenario.get("role", "")
-        time_saved = time_map.get(role, "Saves significant manual time for this workflow")
-
-    system = (
+    system_prompt = (
         f"You are a helpful AI assistant working for {company}, a {industry} company. "
-        f"Generate a realistic, immediately useful response. "
+        f"Generate a realistic, immediately useful, fully complete response. "
         f"Use plausible but clearly fictional data. "
-        f"Make it feel like a real work output — formatted, specific, actionable."
+        f"Format the output professionally — use headers, bullet points, and tables where appropriate. "
+        f"Do NOT truncate or summarise — produce the full output the user asked for."
         f"{scenario_data}"
     )
 
-    output = gemini_text(improved_prompt, system=system)
+    full_prompt = f"{system_prompt}\n\nUser prompt:\n{improved_prompt}"
+
+    # Use a dedicated high-token call — simulation outputs need room to breathe
+    client = get_client()
+    output = None
+    if client:
+        try:
+            response = client.models.generate_content(
+                model="gemini-2.0-flash",
+                contents=full_prompt,
+                config=types.GenerateContentConfig(
+                    temperature=0.6,
+                    max_output_tokens=4096,   # 4x the default — simulation outputs can be long
+                ),
+            )
+            output = response.text.strip() if response.text else None
+        except Exception as e:
+            print(f"run_simulation gemini error: {e}")
+            output = None
+
     if output:
         insight = (
             f"This output was generated in seconds. Connected to {company}'s real data, "
@@ -291,13 +310,20 @@ what this person would actually have. Make the output feel genuinely useful."""
         )
         return {"output": output, "insight": insight, "time_saved": time_saved}
 
+    # Gemini not available — return a clear, honest fallback (not a misleading key error)
+    fallback_situation = scenario.get("situation", task_context) if scenario else task_context
+    fallback_task      = scenario.get("task", "") if scenario else ""
     return {
         "output": (
-            f"**Live simulation requires GEMINI_API_KEY**\n\n"
-            f"Add your Gemini API key to backend/.env.\n"
-            f"Once connected, the AI would process this scenario and return a "
-            f"realistic, immediately useful output for {company}."
+            f"## Simulated AI Output\n\n"
+            f"**Scenario:** {fallback_situation}\n\n"
+            f"**What the AI would do:** {fallback_task}\n\n"
+            f"_To see a live AI-generated output, ensure GEMINI_API_KEY is set in your backend .env file. "
+            f"Once connected, the AI produces a fully formatted, specific response in under 10 seconds._"
         ),
-        "insight": "Set GEMINI_API_KEY in your .env to enable live simulations.",
-        "time_saved": None,
+        "insight": (
+            f"This simulation shows where AI fits into your workflow. "
+            f"With a live Gemini key, you would see a real formatted output here."
+        ),
+        "time_saved": time_saved,
     }

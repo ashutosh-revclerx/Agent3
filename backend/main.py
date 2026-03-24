@@ -22,7 +22,7 @@ from typing import Optional, List
 from dotenv import load_dotenv
 
 ENV_PATH = Path(__file__).resolve().parent / ".env"
-load_dotenv(ENV_PATH , override=True)
+load_dotenv(ENV_PATH)
 
 # ── Import all 7 agents ───────────────────────────────────────────────────────
 from agents import facilitator
@@ -93,6 +93,8 @@ class JoinRequest(BaseModel):
     session_code: str;  name: str;  role: str
     department: str;  top_challenge: str;  ai_confidence: int
     daily_work: str = ""
+    conversation: list = []  # full onboarding chat transcript [{role, text}]
+    workflow_summary: str = ""  # pre-summarised by client (optional)
 
 class Phase2Request(BaseModel):
     session_code:     str
@@ -223,6 +225,51 @@ def get_participants(code: str):
             "participants": [participants[pid] for pid in s["participants"] if pid in participants]}
 
 
+
+def summarise_onboarding_conversation(conversation: list, name: str, role: str, daily_work: str, top_challenge: str) -> str:
+    """
+    Summarises the full onboarding chat into a concise workflow description.
+    Falls back to daily_work if Gemini is not available.
+    """
+    from gemini_client import gemini_text
+
+    if not conversation:
+        return daily_work  # nothing to summarise
+
+    # Build a readable transcript
+    lines = []
+    for m in conversation:
+        speaker = "Participant" if m.get("role") == "user" else "Facilitator"
+        text = m.get("text", "").strip()
+        if text:
+            lines.append(f"{speaker}: {text}")
+    transcript = "\n".join(lines)
+
+    prompt = (
+        f"You are summarising an onboarding conversation for an AI workshop participant.\n\n"
+        f"Participant: {name} | Role: {role}\n\n"
+        f"Conversation transcript:\n{transcript}\n\n"
+        f"Write a clear, concise summary (3-5 sentences) of this person's day-to-day workflow "
+        f"and the main challenge they described. "
+        f"Focus on: what they do regularly, what tools or systems they use, and what slows them down. "
+        f"Write in third person (e.g. '{name} spends...'). "
+        f"Retain all specific details — tools, systems, time spent, pain points. "
+        f"Do not add commentary or recommendations. Return only the summary paragraph."
+    )
+
+    summary = gemini_text(prompt)
+    if summary and len(summary.strip()) > 30:
+        return summary.strip()
+
+    # Fallback: stitch the two raw answers together
+    parts = []
+    if daily_work:
+        parts.append(daily_work)
+    if top_challenge and top_challenge != daily_work:
+        parts.append(top_challenge)
+    return " ".join(parts) if parts else daily_work
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Phase 1 — Participant Onboarding
 # ─────────────────────────────────────────────────────────────────────────────
@@ -235,6 +282,10 @@ async def join_participant(req: JoinRequest):
         "id": str(uuid.uuid4()), "session_code": code,
         "name": req.name, "role": req.role, "department": req.department,
         "top_challenge": req.top_challenge, "daily_work": req.daily_work, "ai_confidence": req.ai_confidence,
+        "conversation": req.conversation,
+        "workflow_summary": summarise_onboarding_conversation(
+            req.conversation, req.name, req.role, req.daily_work, req.top_challenge
+        ),
         "joined_at": datetime.datetime.utcnow().isoformat(),
     }
     sessions[code]["participants"].append(p["id"])
