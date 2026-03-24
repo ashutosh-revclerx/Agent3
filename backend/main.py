@@ -717,3 +717,44 @@ async def clean_transcript(req: CleanRequest):
     if cleaned and cleaned != req.text:
         return {"cleaned": cleaned, "changed": True}
     return {"cleaned": req.text, "changed": False}
+
+class OnboardingMessage(BaseModel):
+    type: str
+    text: str
+
+class OnboardingChatRequest(BaseModel):
+    messages: List[OnboardingMessage]
+    role: str
+    department: str
+
+@app.post("/ai/onboarding-chat")
+async def onboarding_chat_endpoint(req: OnboardingChatRequest):
+    from gemini_client import gemini_json_with_system
+    
+    history = "\n".join([f"{m.type.capitalize()}: {m.text}" for m in req.messages[-8:]])
+    
+    sys_prompt = f"""You are an AI consulting facilitator interviewing a {req.role} in the {req.department} department.
+Your objective is to deeply understand TWO things:
+1. Their daily workflow (what takes up the most time or is the most repetitive).
+2. Their biggest operational or technical challenge.
+
+If the user has clearly and concretely described BOTH, output JSON with "done": true, a warm "closing_message", and the extracted data.
+If their answer is brief, vague, or missing one of the two parts, ask ONE highly specific follow-up question. Output JSON with "done": false and "next_question".
+
+Output strictly valid JSON:
+{{
+  "done": boolean,
+  "next_question": "string (only if done is false)",
+  "closing_message": "string (only if done is true)",
+  "extracted_data": {{
+     "daily_work": "Rich summary of their workflow",
+     "top_challenge": "Rich summary of their challenge"
+  }}
+}}"""
+    prompt = f"Here is the recent conversation history:\n{history}\n\nEvaluate the conversation and respond with the required JSON."
+    
+    res = gemini_json_with_system(prompt, sys_prompt)
+    if not res:
+        return {"done": False, "next_question": "Could you tell me a bit more about how that impacts your day-to-day work?"}
+    
+    return res

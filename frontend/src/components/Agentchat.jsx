@@ -11,6 +11,8 @@ export default function AgentChat({
   agentAvatar = '◇',
   apiBase = '',
   accentColor,
+  dynamicEndpoint = null,
+  context = {},
 }) {
   const [currentIdx, setCurrentIdx] = useState(0)
   const [answers, setAnswers] = useState({})
@@ -70,26 +72,62 @@ export default function AgentChat({
     }])
   }
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     const val = inputVal.trim()
-    if (!val && currentQ?.required !== false) return
+    if (!val && !dynamicEndpoint && currentQ?.required !== false) return
+    if (!val && dynamicEndpoint) return
 
-    const newAnswers = { ...answers, [currentQ.field]: val }
+    const newAnswers = { ...answers, [currentQ?.field]: val }
     setAnswers(newAnswers)
     pushUser(val)
     setInputVal('')
+    setSubmitting(true)
+
+    if (dynamicEndpoint) {
+      try {
+        const payload = {
+          messages: [...messages, { type: 'user', text: val }].map(m => ({ type: m.type, text: m.text })),
+          ...context
+        }
+        const res = await fetch(`${apiBase}${dynamicEndpoint}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        })
+        const data = await res.json()
+        if (data.done) {
+          pushAgentAck(data.closing_message || 'Perfect — I have everything I need.')
+          setTimeout(() => {
+            setDone(true)
+            onComplete(data.extracted_data || newAnswers)
+          }, 1000)
+        } else {
+          setTimeout(() => {
+            setMessages(prev => [...prev, {
+              type: 'agent',
+              text: data.next_question,
+              id: nextId(),
+            }])
+          }, 600)
+        }
+      } catch (err) {
+        console.error(err)
+        setTimeout(() => pushAgentAck('Sorry, I had trouble connecting. Could you try again?'), 600)
+      } finally {
+        setTimeout(() => setSubmitting(false), 600)
+      }
+      return
+    }
 
     const nextIdx = currentIdx + 1
 
     if (nextIdx < questions.length) {
-      setSubmitting(true)
       setTimeout(() => {
         setCurrentIdx(nextIdx)
         pushAgentAck(questions[nextIdx].question, questions[nextIdx].hint)
         setSubmitting(false)
       }, 600)
     } else {
-      setSubmitting(true)
       setTimeout(() => {
         setMessages(prev => [...prev, {
           type: 'agent',
@@ -158,16 +196,23 @@ export default function AgentChat({
             onKeyDown={handleKeyDown}
           />
           <div className="agent-chat-footer">
-            <span className="agent-chat-progress">
-              {currentIdx + 1} of {questions.length}
-            </span>
+            {!dynamicEndpoint && (
+              <span className="agent-chat-progress">
+                {currentIdx + 1} of {questions.length}
+              </span>
+            )}
+            {dynamicEndpoint && (
+              <span className="agent-chat-progress" style={{ color: 'var(--accent)' }}>
+                ✨ Interactive Mode
+              </span>
+            )}
             <button
               className="btn btn-primary"
               onClick={handleSubmit}
-              disabled={!inputVal.trim() && currentQ.required !== false}
+              disabled={!inputVal.trim() && !dynamicEndpoint && currentQ?.required !== false}
               type="button"
             >
-              {currentIdx === questions.length - 1 ? 'Submit →' : 'Next →'}
+              {dynamicEndpoint ? 'Send →' : (currentIdx === questions.length - 1 ? 'Submit →' : 'Next →')}
             </button>
           </div>
         </div>

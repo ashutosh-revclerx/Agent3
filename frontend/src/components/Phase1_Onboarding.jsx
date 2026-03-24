@@ -203,6 +203,8 @@ export default function Phase1_Onboarding({ api, apiBase, session, role, onCompl
                   <AgentChat
                     key={selectedRole}
                     questions={chatQuestions}
+                    dynamicEndpoint="/ai/onboarding-chat"
+                    context={{ role: selectedRole, department }}
                     agentName="Facilitator Agent"
                     agentAvatar="◇"
                     apiBase={apiBase}
