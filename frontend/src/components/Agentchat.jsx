@@ -8,7 +8,7 @@ export default function AgentChat({
   questions = [],
   onComplete,
   agentName = 'AI Facilitator',
-  agentAvatar = 'â—ˆ',
+  agentAvatar = '◇',
   apiBase = '',
   accentColor,
 }) {
@@ -167,7 +167,7 @@ export default function AgentChat({
               disabled={!inputVal.trim() && currentQ.required !== false}
               type="button"
             >
-              {currentIdx === questions.length - 1 ? 'Submit â†’' : 'Next â†’'}
+              {currentIdx === questions.length - 1 ? 'Submit →' : 'Next →'}
             </button>
           </div>
         </div>
@@ -175,7 +175,7 @@ export default function AgentChat({
 
       {done && (
         <div className="agent-chat-done">
-          <span className="agent-chat-done-icon">âœ“</span>
+          <span className="agent-chat-done-icon">✓</span>
           <span className="agent-chat-done-text">All responses captured</span>
         </div>
       )}

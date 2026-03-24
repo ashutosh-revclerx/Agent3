@@ -252,6 +252,7 @@ export default function VoiceTextInput({
               setIsCleaned(false)
               onChange(e.target.value)
             }}
+            onKeyDown={onKeyDown}
             disabled={disabled}
             style={{ resize: 'vertical' }}
           />

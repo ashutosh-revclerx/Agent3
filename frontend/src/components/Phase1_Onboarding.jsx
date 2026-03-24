@@ -136,11 +136,11 @@ export default function Phase1_Onboarding({ api, apiBase, session, role, onCompl
               autoFocus
             />
           </div>
-          {error && <div className="error-banner">âš  {error}</div>}
+          {error && <div className="error-banner">⚠️ {error}</div>}
           <div className="phase-footer" style={{ marginTop: 'auto' }}>
             <div />
             <button className="btn btn-primary" onClick={handleCodeSubmit} disabled={loading || !sessionCode.trim()}>
-              {loading ? <><span className="spinner" /> Checking...</> : 'Join â†’'}
+              {loading ? <><span className="spinner" /> Checking...</> : 'Join →'}
             </button>
           </div>
         </div>
@@ -152,7 +152,7 @@ export default function Phase1_Onboarding({ api, apiBase, session, role, onCompl
             <div style={{ padding: '8px 22px', background: 'var(--accent-light)', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
               <span style={{ fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--accent)' }}>Joining</span>
               <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', fontFamily: 'var(--font-h)' }}>
-                {resolvedSession.company} Â· {resolvedSession.code}
+                {resolvedSession.company} · {resolvedSession.code}
               </span>
             </div>
           )}
@@ -204,7 +204,7 @@ export default function Phase1_Onboarding({ api, apiBase, session, role, onCompl
                     key={selectedRole}
                     questions={chatQuestions}
                     agentName="Facilitator Agent"
-                    agentAvatar="â—ˆ"
+                    agentAvatar="◇"
                     apiBase={apiBase}
                     onComplete={(answers) => {
                       setTopChallenge(answers.top_challenge || '')
@@ -222,13 +222,13 @@ export default function Phase1_Onboarding({ api, apiBase, session, role, onCompl
               )}
             </div>
 
-            {error && <div className="error-banner">âš  {error}</div>}
+            {error && <div className="error-banner">⚠️ {error}</div>}
           </div>
 
           <div className="phase-footer">
             <button className="btn btn-ghost" onClick={onBack}>â† Back</button>
             <button className="btn btn-primary" onClick={handleJoin} disabled={!isFormValid || loading}>
-              {loading ? <><span className="spinner" /> Joining...</> : 'Enter Workshop â†’'}
+              {loading ? <><span className="spinner" /> Joining...</> : 'Enter Workshop →'}
             </button>
           </div>
         </>
