@@ -50,6 +50,14 @@ export default function VoiceTextInput({
   const audioUrlRef    = useRef(null)
   const textareaRef    = useRef(null)
 
+  const valueRef = useRef(value)
+  const onChangeRef = useRef(onChange)
+
+  useEffect(() => {
+    valueRef.current = value
+    onChangeRef.current = onChange
+  }, [value, onChange])
+
   // ── Play AI question via ElevenLabs on mount ─────────────────────────────
   useEffect(() => {
     if (!aiQuestion || !apiBase) return
@@ -134,8 +142,8 @@ export default function VoiceTextInput({
       setLiveTranscript(interim)
       // Append confirmed final text to existing value
       if (final) {
-        const separator = value.trim().length > 0 ? ' ' : ''
-        onChange(value + separator + final)
+        const separator = valueRef.current.trim().length > 0 ? ' ' : ''
+        onChangeRef.current(valueRef.current + separator + final)
         setLiveTranscript('')
       }
     }
@@ -150,9 +158,7 @@ export default function VoiceTextInput({
 
     recognition.onend = () => {
       setLiveTranscript('')
-      if (micState === MIC_STATES.recording) {
-        setMicState(MIC_STATES.idle)
-      }
+      setMicState(prev => prev === MIC_STATES.recording ? MIC_STATES.idle : prev)
     }
 
     recognition.start()
@@ -167,8 +173,9 @@ export default function VoiceTextInput({
     setLiveTranscript('')
 
     // Optional: clean transcript with Gemini
-    if (cleanWithAI && value.trim().length > 40 && apiBase) {
-      cleanTranscript(value)
+    const currentValue = valueRef.current || value;
+    if (cleanWithAI && currentValue.trim().length > 40 && apiBase) {
+      cleanTranscript(currentValue)
     } else {
       setMicState(MIC_STATES.idle)
     }
