@@ -271,7 +271,7 @@ function getRoleConfig(role) {
 // ─────────────────────────────────────────────────────────────────────────────
 // COMPONENT
 // ─────────────────────────────────────────────────────────────────────────────
-export default function Phase2_Context({ api, getWsBase, session, participant, onComplete }) {
+export default function Phase2_Context({ api, apiBase, getWsBase, session, participant, onComplete }) {
   const role    = participant?.role || 'Other'
   const config  = getRoleConfig(role)
 
@@ -567,7 +567,7 @@ export default function Phase2_Context({ api, getWsBase, session, participant, o
                 }]}
                 agentName="Insight Mining Agent"
                 agentAvatar="◈"
-                apiBase={window.__API_BASE__ || ''}
+                apiBase={apiBase}
                 onComplete={(answers) => setChallenges(answers.challenges || '')}
               />
 

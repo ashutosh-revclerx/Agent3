@@ -34,7 +34,7 @@ export default function Phase1_Onboarding({ api, apiBase, session, role, onCompl
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
 
-  const [name, setName] = useState('')
+  const [name, setName] = useState(role === 'host' ? (session?.host_name || '') : '')
   const [selectedRole, setSelectedRole] = useState('')
   const [department, setDepartment] = useState('')
 
@@ -84,14 +84,19 @@ export default function Phase1_Onboarding({ api, apiBase, session, role, onCompl
     }
   }
 
-  const chatQuestions = useMemo(() => (
-    selectedRole
+  const chatQuestions = useMemo(() => {
+    const firstName = name ? name.split(' ')[0] : ''
+    const greeting = firstName
+      ? `Hey ${firstName}! 👋 I'm your AI facilitator. Say hello to start our conversation!`
+      : `Hey there! 👋 I'm your AI facilitator. Say hello to start our conversation!`
+    
+    return selectedRole
       ? [
           {
             id: 'daily_work',
-            question: 'What is the most time-consuming or repetitive part of your daily work?',
-            hint: 'Think about manual reporting, data entry, email processing, or coordinating across systems.',
-            placeholder: 'Briefly describe your main daily activities.',
+            question: greeting,
+            hint: 'Just say or type "hello" to begin.',
+            placeholder: 'Say hello to start...',
             field: 'daily_work',
             required: true,
           },
@@ -105,7 +110,7 @@ export default function Phase1_Onboarding({ api, apiBase, session, role, onCompl
           }
         ]
       : []
-  ), [selectedRole])
+  }, [selectedRole, name])
 
   return (
     <div className="phase-shell fade-up">
@@ -195,7 +200,7 @@ export default function Phase1_Onboarding({ api, apiBase, session, role, onCompl
               {selectedRole && (
                 <div className="input-group">
                   <label className="input-label">
-                    One question from the AI
+                    Lets walk through how you start the work
                     <span style={{ marginLeft: 6, fontSize: 10, color: 'var(--accent)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
                       Interactive
                     </span>
@@ -204,7 +209,7 @@ export default function Phase1_Onboarding({ api, apiBase, session, role, onCompl
                     key={selectedRole}
                     questions={chatQuestions}
                     dynamicEndpoint="/ai/onboarding-chat"
-                    context={{ role: selectedRole, department }}
+                    context={{ name, role: selectedRole, department }}
                     agentName="Facilitator Agent"
                     agentAvatar="◇"
                     apiBase={apiBase}

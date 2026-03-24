@@ -1,327 +1,51 @@
-import VoiceTextInput from './Voicetextinput'
-import AgentChat from './Agentchat'
 import { useState, useEffect, useRef } from 'react'
 import './phases.css'
 
-// ─────────────────────────────────────────────────────────────────────────────
-// ROLE-BASED QUESTION SETS
-// Each role gets tailored objectives, growth options, and a challenge prompt
-// ─────────────────────────────────────────────────────────────────────────────
-const ROLE_CONFIG = {
-  'CEO / Founder': {
-    objectiveTitle: 'What are your top strategic priorities?',
-    objectiveDesc:  'Select the outcomes most critical to your business this year.',
-    growthTitle:    'Where are your biggest growth bets?',
-    challengePrompt:'What is the single biggest thing holding your business back from its next stage of growth?',
-    challengeHint:  'Think about competitive pressure, internal capability gaps, or market timing.',
-    objectives: [
-      { id: 'revenue',    icon: '◆', label: 'Revenue Growth',         desc: 'Increase sales, expand markets' },
-      { id: 'scale',      icon: '⬢', label: 'Scaling the Business',   desc: 'Grow without proportional cost' },
-      { id: 'cx',         icon: '◎', label: 'Customer Experience',    desc: 'Retention, NPS, loyalty' },
-      { id: 'product',    icon: '⬡', label: 'Product Innovation',     desc: 'New offerings, new markets' },
-      { id: 'efficiency', icon: '◈', label: 'Operational Efficiency', desc: 'Reduce cost, improve margins' },
-      { id: 'talent',     icon: '◉', label: 'Talent & Culture',       desc: 'Attract, retain, develop people' },
-      { id: 'risk',       icon: '▣', label: 'Risk & Governance',      desc: 'Compliance, resilience' },
-      { id: 'data',       icon: '◇', label: 'Data-Driven Decisions',  desc: 'Better insight, faster choices' },
-    ],
-    growthOptions: [
-      'Entering new markets or geographies',
-      'Launching a new product or service line',
-      'Increasing profitability without headcount growth',
-      'Building a competitive moat through technology',
-      'Improving investor or board confidence in AI strategy',
-      'Reducing operational cost base',
-      'Scaling revenue per customer (upsell/cross-sell)',
-      'Building AI capabilities before competitors do',
-    ],
-  },
+const PROBLEM_TAGS = [
+  'Repetitive', 'Time-consuming', 'Manual', 'Error-prone',
+  'Slow decision-making', 'Data scattered', 'No visibility',
+  'Customer-facing', 'Compliance risk',
+]
 
-  'CTO / Technology Leader': {
-    objectiveTitle: 'What are your core technology objectives?',
-    objectiveDesc:  'Select the technology outcomes your team is being measured on.',
-    growthTitle:    'Where is your team investing engineering effort?',
-    challengePrompt:'What technical or infrastructure limitation is creating the most friction for your team right now?',
-    challengeHint:  'Think about legacy systems, data pipelines, deployment speed, or team capability gaps.',
-    objectives: [
-      { id: 'infra',      icon: '◆', label: 'Infrastructure Modernisation', desc: 'Cloud, scalability, reliability' },
-      { id: 'velocity',   icon: '◈', label: 'Engineering Velocity',          desc: 'Faster delivery, less toil' },
-      { id: 'data',       icon: '◇', label: 'Data Platform & Quality',       desc: 'Pipelines, governance, access' },
-      { id: 'security',   icon: '▣', label: 'Security & Compliance',         desc: 'Zero trust, audit readiness' },
-      { id: 'ai_infra',   icon: '⬡', label: 'AI/ML Infrastructure',          desc: 'Models, APIs, MLOps' },
-      { id: 'integration',icon: '◉', label: 'Systems Integration',           desc: 'APIs, legacy connectors' },
-      { id: 'observ',     icon: '◎', label: 'Observability & Reliability',   desc: 'Uptime, monitoring, SLOs' },
-      { id: 'talent',     icon: '⬢', label: 'Engineering Talent',            desc: 'Hiring, retaining, upskilling' },
-    ],
-    growthOptions: [
-      'Reducing time-to-deploy for new features',
-      'Migrating legacy systems to modern architecture',
-      'Building internal AI/ML tooling and platforms',
-      'Improving data quality and pipeline reliability',
-      'Reducing technical debt blocking new work',
-      'Enabling self-service data access for non-engineers',
-      'Reducing on-call burden and operational toil',
-      'Upskilling the team on AI/ML fundamentals',
-    ],
-  },
-
-  'COO / Operations': {
-    objectiveTitle: 'What are your operational priorities?',
-    objectiveDesc:  'Select the areas where you need to improve performance or reduce cost.',
-    growthTitle:    'Where do you see the most operational leverage?',
-    challengePrompt:'Describe the operational bottleneck that is most frequently raised in your leadership reviews.',
-    challengeHint:  'Think about process failures, manual steps, coordination costs, or quality issues.',
-    objectives: [
-      { id: 'efficiency', icon: '◈', label: 'Process Efficiency',        desc: 'Reduce steps, eliminate waste' },
-      { id: 'quality',    icon: '◆', label: 'Quality & Error Reduction', desc: 'Fewer mistakes, better outcomes' },
-      { id: 'cost',       icon: '◎', label: 'Cost Reduction',            desc: 'Do more with less' },
-      { id: 'scale',      icon: '⬢', label: 'Capacity & Scaling',        desc: 'Handle more volume' },
-      { id: 'visibility', icon: '◇', label: 'Operational Visibility',    desc: 'Real-time dashboards, alerts' },
-      { id: 'compliance', icon: '▣', label: 'Compliance & Risk',         desc: 'SOPs, audit trails' },
-      { id: 'workforce',  icon: '◉', label: 'Workforce Productivity',    desc: 'Output per head' },
-      { id: 'cx',         icon: '⬡', label: 'Service Quality',           desc: 'Consistent delivery standards' },
-    ],
-    growthOptions: [
-      'Automating high-volume manual processes',
-      'Reducing error rates and rework costs',
-      'Improving cross-department coordination',
-      'Building real-time operational dashboards',
-      'Reducing dependency on specific individuals',
-      'Standardising processes across locations or teams',
-      'Shortening decision-making cycles',
-      'Improving supplier or vendor performance tracking',
-    ],
-  },
-
-  'Product Manager': {
-    objectiveTitle: 'What are your product and growth objectives?',
-    objectiveDesc:  'Select what your product team is focused on delivering.',
-    growthTitle:    'Where is your product investment going this year?',
-    challengePrompt:'What is slowing your team\'s ability to ship valuable product to customers?',
-    challengeHint:  'Think about discovery, prioritisation, engineering capacity, or feedback loops.',
-    objectives: [
-      { id: 'adoption',   icon: '◆', label: 'User Adoption & Activation',  desc: 'Get users to value faster' },
-      { id: 'retention',  icon: '◈', label: 'Retention & Engagement',      desc: 'Keep users coming back' },
-      { id: 'velocity',   icon: '⬡', label: 'Shipping Velocity',            desc: 'Deliver features faster' },
-      { id: 'discovery',  icon: '◎', label: 'User Research & Insights',    desc: 'Understand what users need' },
-      { id: 'cx',         icon: '◉', label: 'Customer Experience Quality', desc: 'NPS, support, satisfaction' },
-      { id: 'data',       icon: '◇', label: 'Product Analytics',           desc: 'Usage data, funnels, A/B tests' },
-      { id: 'revenue',    icon: '▣', label: 'Monetisation & Revenue',      desc: 'Pricing, upsell, conversion' },
-      { id: 'ai',         icon: '⬢', label: 'AI-Powered Features',         desc: 'Build AI into the product' },
-    ],
-    growthOptions: [
-      'Reducing time from idea to user feedback',
-      'Improving product-led growth and onboarding',
-      'Building AI features that create competitive advantage',
-      'Improving data-driven prioritisation of roadmap',
-      'Reducing support burden through better UX',
-      'Personalising the product experience at scale',
-      'Increasing cross-sell and upsell through the product',
-      'Shortening release cycles and deployment risk',
-    ],
-  },
-
-  'Data / AI Engineer': {
-    objectiveTitle: 'What are your data and AI engineering priorities?',
-    objectiveDesc:  'Select the technical outcomes your work is supporting.',
-    growthTitle:    'Where is your data/AI work creating most value?',
-    challengePrompt:'What is the biggest technical obstacle preventing your team from delivering AI at production quality?',
-    challengeHint:  'Think about data quality, model reliability, tooling gaps, or deployment friction.',
-    objectives: [
-      { id: 'dataquality',icon: '◆', label: 'Data Quality & Reliability',  desc: 'Clean, trustworthy pipelines' },
-      { id: 'mlops',      icon: '◈', label: 'MLOps & Model Deployment',    desc: 'Reliable, monitored models' },
-      { id: 'platform',   icon: '⬡', label: 'Data Platform Scalability',   desc: 'Handle growing data volumes' },
-      { id: 'selfservice',icon: '◎', label: 'Self-Service Analytics',      desc: 'Empower non-engineers' },
-      { id: 'governance', icon: '◉', label: 'Data Governance & Lineage',   desc: 'Trust, compliance, access' },
-      { id: 'realtime',   icon: '◇', label: 'Real-Time Data Processing',   desc: 'Streaming, low-latency feeds' },
-      { id: 'llm',        icon: '▣', label: 'LLM & GenAI Integration',     desc: 'RAG, fine-tuning, agents' },
-      { id: 'features',   icon: '⬢', label: 'Feature Engineering & Stores',desc: 'Reusable ML features' },
-    ],
-    growthOptions: [
-      'Reducing time from raw data to model in production',
-      'Improving model monitoring and drift detection',
-      'Building a self-service analytics layer for business teams',
-      'Improving data lineage and metadata management',
-      'Reducing manual data preparation and cleaning work',
-      'Building reusable AI components across the organisation',
-      'Integrating LLMs into internal workflows and products',
-      'Improving training data quality and labelling pipelines',
-    ],
-  },
-
-  'Business Analyst': {
-    objectiveTitle: 'What are your analytics and insight priorities?',
-    objectiveDesc:  'Select the areas where better data and analysis would create most impact.',
-    growthTitle:    'Where do you see the most opportunity for better decisions?',
-    challengePrompt:'Describe the reporting or analysis task that takes the most manual effort and produces the least reliable output.',
-    challengeHint:  'Think about data gathering, spreadsheet wrangling, or insight-to-decision delays.',
-    objectives: [
-      { id: 'reporting',  icon: '◆', label: 'Automated Reporting',         desc: 'Less manual, more reliable' },
-      { id: 'visibility', icon: '◈', label: 'Business Visibility',         desc: 'Real-time KPIs and alerts' },
-      { id: 'forecast',   icon: '⬡', label: 'Forecasting & Planning',      desc: 'Better predictions' },
-      { id: 'selfservice',icon: '◎', label: 'Self-Service Insights',       desc: 'Stakeholders find answers themselves' },
-      { id: 'dataquality',icon: '◉', label: 'Data Quality & Trust',        desc: 'Numbers everyone believes' },
-      { id: 'speed',      icon: '◇', label: 'Faster Analysis Cycles',      desc: 'Less time waiting for data' },
-      { id: 'segmentation',icon:'▣', label: 'Customer & Market Segmentation',desc:'Deeper understanding of patterns' },
-      { id: 'compliance', icon: '⬢', label: 'Audit & Compliance Reporting',desc: 'Traceable, defensible numbers' },
-    ],
-    growthOptions: [
-      'Eliminating manual data consolidation from multiple sources',
-      'Building dashboards stakeholders actually use',
-      'Automating recurring weekly and monthly reports',
-      'Making forecasting models more accurate and explainable',
-      'Reducing time from data request to insight delivery',
-      'Improving data literacy across non-technical teams',
-      'Connecting operational data to financial outcomes',
-      'Building early-warning indicators for business performance',
-    ],
-  },
-
-  'Department Head': {
-    objectiveTitle: 'What does success look like for your department?',
-    objectiveDesc:  'Select the outcomes your department is being measured on.',
-    growthTitle:    'Where is your department investing time and budget?',
-    challengePrompt:'What keeps your team from performing at its best? Be specific about where time is wasted or quality suffers.',
-    challengeHint:  'Think about handoffs, approvals, tools, reporting, or coordination with other teams.',
-    objectives: [
-      { id: 'productivity',icon:'◆', label: 'Team Productivity',           desc: 'Output per person' },
-      { id: 'quality',    icon: '◈', label: 'Work Quality',                desc: 'Fewer errors, higher standards' },
-      { id: 'efficiency', icon: '⬡', label: 'Process Efficiency',          desc: 'Eliminate waste and delay' },
-      { id: 'visibility', icon: '◎', label: 'Departmental Visibility',     desc: 'Dashboards, progress tracking' },
-      { id: 'talent',     icon: '◉', label: 'Team Development',            desc: 'Skills, capacity, retention' },
-      { id: 'cx',         icon: '◇', label: 'Internal Customer Satisfaction',desc:'Stakeholder experience' },
-      { id: 'cost',       icon: '▣', label: 'Budget Efficiency',           desc: 'Do more within budget' },
-      { id: 'compliance', icon: '⬢', label: 'Compliance & Risk',           desc: 'Policies, governance, audits' },
-    ],
-    growthOptions: [
-      'Reducing time spent on manual and administrative tasks',
-      'Improving handoff quality between my team and others',
-      'Getting better real-time visibility into team workload',
-      'Reducing reliance on tribal knowledge and key-person risk',
-      'Speeding up approval and sign-off workflows',
-      'Improving onboarding for new team members',
-      'Better tracking of team KPIs and output',
-      'Reducing meeting load while maintaining alignment',
-    ],
-  },
-
-  'Consultant': {
-    objectiveTitle: 'What outcomes are your clients asking for most?',
-    objectiveDesc:  'Select the themes that dominate client conversations.',
-    growthTitle:    'Where do you see the most AI opportunity for your clients?',
-    challengePrompt:'What is the most common reason client AI initiatives fail to reach production, in your experience?',
-    challengeHint:  'Think about data readiness, stakeholder buy-in, scope creep, or implementation quality.',
-    objectives: [
-      { id: 'roi',        icon: '◆', label: 'Demonstrable ROI',            desc: 'Tangible business value fast' },
-      { id: 'adoption',   icon: '◈', label: 'Client Adoption',             desc: 'People actually use what\'s built' },
-      { id: 'delivery',   icon: '⬡', label: 'Delivery Speed',              desc: 'Faster time to working solution' },
-      { id: 'scale',      icon: '◎', label: 'Scalable Architecture',       desc: 'Solutions that grow with the client' },
-      { id: 'change',     icon: '◉', label: 'Change Management',           desc: 'Embedding AI in workflows' },
-      { id: 'data',       icon: '◇', label: 'Data Readiness',              desc: 'Foundations before AI' },
-      { id: 'strategy',   icon: '▣', label: 'AI Strategy & Roadmap',       desc: 'Where to play, how to win' },
-      { id: 'governance', icon: '⬢', label: 'AI Governance & Ethics',      desc: 'Responsible deployment' },
-    ],
-    growthOptions: [
-      'Building proof-of-concepts that convert to full projects',
-      'Helping clients build internal AI capability vs dependency',
-      'Identifying quick wins that fund larger transformation',
-      'Navigating data privacy and compliance requirements',
-      'Getting exec sponsorship for AI initiatives',
-      'Bridging the gap between IT and business teams',
-      'Developing repeatable AI frameworks across client sectors',
-      'Measuring and communicating AI ROI to stakeholders',
-    ],
-  },
-
-  'Other': {
-    objectiveTitle: 'What are your top strategic priorities?',
-    objectiveDesc:  'Select all that apply to your work this year.',
-    growthTitle:    'Where are your biggest growth priorities?',
-    challengePrompt:'Describe the biggest operational challenge in your day-to-day work.',
-    challengeHint:  'Be specific about what is repetitive, slow, error-prone, or frustrating.',
-    objectives: [
-      { id: 'revenue',    icon: '◆', label: 'Revenue Growth',         desc: 'Increase sales, expand markets' },
-      { id: 'efficiency', icon: '◈', label: 'Operational Efficiency', desc: 'Reduce costs, streamline processes' },
-      { id: 'cx',         icon: '◎', label: 'Customer Experience',    desc: 'Improve satisfaction & retention' },
-      { id: 'product',    icon: '⬡', label: 'Product Innovation',     desc: 'Launch new products or features' },
-      { id: 'talent',     icon: '◉', label: 'Talent & Productivity',  desc: 'Empower teams, reduce manual work' },
-      { id: 'risk',       icon: '▣', label: 'Risk & Compliance',      desc: 'Reduce errors, improve governance' },
-      { id: 'data',       icon: '◇', label: 'Data & Insights',        desc: 'Better decisions from data' },
-      { id: 'scale',      icon: '⬢', label: 'Scaling Operations',     desc: 'Grow without proportional cost' },
-    ],
-    growthOptions: [
-      'Entering new markets',
-      'Increasing revenue per customer',
-      'Launching new products or services',
-      'Improving customer retention',
-      'Reducing operational costs',
-      'Automating manual workflows',
-      'Improving data quality & access',
-      'Building AI capabilities in-house',
-    ],
-  },
+const SEVERITY_LABELS = {
+  1: { label: 'Minor inconvenience', color: 'var(--text-3)' },
+  2: { label: 'Regular friction',    color: 'var(--amber)' },
+  3: { label: 'Significant impact',  color: 'var(--amber)' },
+  4: { label: 'Major bottleneck',    color: '#e07040' },
+  5: { label: 'Critical blocker',    color: 'var(--red)' },
 }
 
-// Fallback for any unrecognised role
-const DEFAULT_CONFIG = ROLE_CONFIG['Other']
-
-function getRoleConfig(role) {
-  return ROLE_CONFIG[role] || DEFAULT_CONFIG
+// Role-specific workflow placeholder text
+const WORKFLOW_PLACEHOLDERS = {
+  'CEO / Founder':           'e.g. Every board meeting I ask 3 different teams for the same KPIs. Each team pulls data differently, we spend 2 days reconciling numbers before I can present...',
+  'CTO / Technology Leader': 'e.g. When a bug reaches production, I manually check 4 dashboards, cross-reference logs in two systems, then post a Slack update every 30 minutes until resolved...',
+  'COO / Operations':        'e.g. Each week I export a report from the ERP, paste it into Excel, manually add columns from a second system, then format it into the ops review template...',
+  'Product Manager':         'e.g. For each feature release I create a Jira ticket, write a Confluence spec, copy key details into a Slack channel, then re-enter delivery dates into a roadmap spreadsheet...',
+  'Data / AI Engineer':      'e.g. Every morning I check 3 pipeline dashboards, manually re-run failed jobs, document the failure in a Google Sheet, then notify stakeholders via email...',
+  'Business Analyst':        'e.g. Monthly reporting: I download 5 CSV exports, open each in Excel, clean the data, use VLOOKUP to join them, then manually build the charts in PowerPoint...',
+  'Department Head':         'e.g. To approve a purchase I receive an email, check the budget spreadsheet, reply with approval, then separately notify finance by filling in a web form...',
+  'Consultant':              'e.g. For every client engagement I copy-paste the scope template, manually update all company-specific references, then recreate the same slide structure from scratch...',
+  'Other':                   'e.g. Every Monday I open 3 spreadsheets, copy last week\'s numbers into a master sheet, manually calculate the totals, then paste them into a slide for the 9am review...',
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// COMPONENT
-// ─────────────────────────────────────────────────────────────────────────────
-export default function Phase2_Context({ api, getWsBase, session, participant, onComplete }) {
-  const role    = participant?.role || 'Other'
-  const config  = getRoleConfig(role)
+const DEFAULT_PLACEHOLDER = WORKFLOW_PLACEHOLDERS['Other']
 
-  const [step,        setStep]        = useState('objectives')
-  const [objectives,  setObjectives]  = useState([])
-  const [growthAreas, setGrowthAreas] = useState([])
-  const [challenges,  setChallenges]  = useState('')
-  const [submitting,       setSubmitting]       = useState(false)
-  const [error,            setError]            = useState(null)
-  const [insights,         setInsights]         = useState(null)
-  const [liveCount,        setLiveCount]        = useState(1)
-  // custom "other" entries
-  const [customObjective,  setCustomObjective]  = useState('')
-  const [customObjectives, setCustomObjectives] = useState([])
-  const [showObjInput,     setShowObjInput]     = useState(false)
-  const [customGrowth,     setCustomGrowth]     = useState('')
-  const [customGrowths,    setCustomGrowths]    = useState([])
-  const [showGrowthInput,  setShowGrowthInput]  = useState(false)
+export default function Phase3_Problems({ api, getWsBase, session, participant, onComplete }) {
+  const role = participant?.role || 'Other'
+  const workflowPlaceholder = WORKFLOW_PLACEHOLDERS[role] || DEFAULT_PLACEHOLDER
+
+  const [step,         setStep]         = useState('submit')
+  const [problems,     setProblems]     = useState([
+    { id: 1, text: '', tags: [], severity: 3,
+      department: participant?.department || '',
+      workflow_description: '' },
+  ])
+  const [liveProblems, setLiveProblems] = useState([])
+  const [clusters,     setClusters]    = useState(null)
+  const [submitting,   setSubmitting]  = useState(false)
+  const [error,        setError]       = useState(null)
+  const [liveCount,    setLiveCount]   = useState(1)
   const wsRef = useRef(null)
-
-  // ── Custom objective helpers ─────────────────────────────────────────────
-  const addCustomObjective = () => {
-    const val = customObjective.trim()
-    if (val.length < 3) return
-    const id = `custom_obj_${Date.now()}`
-    setCustomObjectives(prev => [...prev, { id, label: val, icon: '◇', desc: 'Custom', custom: true }])
-    setObjectives(prev => [...prev, id])
-    setCustomObjective('')
-    setShowObjInput(false)
-  }
-  const removeCustomObjective = (id) => {
-    setCustomObjectives(prev => prev.filter(o => o.id !== id))
-    setObjectives(prev => prev.filter(x => x !== id))
-  }
-
-  // ── Custom growth helpers ────────────────────────────────────────────────
-  const addCustomGrowth = () => {
-    const val = customGrowth.trim()
-    if (val.length < 3) return
-    setCustomGrowths(prev => [...prev, val])
-    setGrowthAreas(prev => [...prev, val])
-    setCustomGrowth('')
-    setShowGrowthInput(false)
-  }
-  const removeCustomGrowth = (g) => {
-    setCustomGrowths(prev => prev.filter(x => x !== g))
-    setGrowthAreas(prev => prev.filter(x => x !== g))
-  }
-
-  const allObjectives = [...config.objectives, ...customObjectives]
 
   // WebSocket
   useEffect(() => {
@@ -333,48 +57,55 @@ export default function Phase2_Context({ api, getWsBase, session, participant, o
     ws.onmessage = (e) => {
       try {
         const msg = JSON.parse(e.data)
-        if (msg.type === 'context_count') setLiveCount(msg.count)
-        if (msg.type === 'objective_map')  setInsights(msg.data)
+        if (msg.type === 'problems_count')   setLiveCount(msg.count)
+        if (msg.type === 'live_problems')    setLiveProblems(msg.problems)
+        if (msg.type === 'problem_clusters') setClusters(msg.data)
       } catch {}
     }
     ws.onerror = () => {}
     return () => ws.close()
   }, [session?.code])
 
-  const toggleObjective = (id) =>
-    setObjectives(prev =>
-      prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
-    )
-  const toggleGrowth = (g) =>
-    setGrowthAreas(prev =>
-      prev.includes(g) ? prev.filter(x => x !== g) : [...prev, g]
-    )
+  const updateProblem = (id, key, val) =>
+    setProblems(ps => ps.map(p => p.id === id ? { ...p, [key]: val } : p))
 
-  const canSubmit =
-    objectives.length > 0 &&
-    growthAreas.length > 0 &&
-    challenges.trim().length > 20
+  const toggleTag = (id, tag) =>
+    setProblems(ps => ps.map(p => {
+      if (p.id !== id) return p
+      const tags = p.tags.includes(tag) ? p.tags.filter(t => t !== tag) : [...p.tags, tag]
+      return { ...p, tags }
+    }))
+
+  const addProblem = () => {
+    if (problems.length >= 5) return
+    setProblems(ps => [...ps, {
+      id: Date.now(), text: '', tags: [], severity: 3,
+      department: participant?.department || '',
+      workflow_description: '',
+    }])
+  }
+
+  const removeProblem = (id) =>
+    setProblems(ps => ps.filter(p => p.id !== id))
+
+  const validProblems = problems.filter(p => p.text.trim().length > 10)
 
   const handleSubmit = async () => {
+    if (validProblems.length === 0) return
     setSubmitting(true)
     setError(null)
     try {
-      const result = await api('/phase/context', {
+      const result = await api('/phase/problems', {
         method: 'POST',
         body: JSON.stringify({
-          session_code:    session.code,
-          participant_id:  participant?.id,
-          participant_role: role,
-          objectives: objectives.map(id => {
-            const found = allObjectives.find(o => o.id === id)
-            return found ? found.label : id
-          }),
-          growth_areas: growthAreas,
-          challenges:      challenges.trim(),
+          session_code:   session.code,
+          participant_id: participant?.id,
+          problems: validProblems.map(({ id, ...rest }) => rest),
         }),
       })
-      setInsights(result.objective_map)
-      setStep('insights')
+      setClusters(result.clusters)
+      setLiveProblems(result.all_problems || [])
+      setStep('clusters')
     } catch {
       setError('Could not submit. Is the backend running?')
     } finally {
@@ -382,8 +113,8 @@ export default function Phase2_Context({ api, getWsBase, session, participant, o
     }
   }
 
-  const steps  = ['objectives', 'growth', 'challenges', 'insights']
-  const stepIdx = steps.indexOf(step)
+  // How many problems have a workflow filled in
+  const workflowCount = validProblems.filter(p => p.workflow_description?.trim().length > 10).length
 
   return (
     <div className="phase-shell fade-up">
@@ -392,321 +123,298 @@ export default function Phase2_Context({ api, getWsBase, session, participant, o
         <div className="phase-logo">◈ AI Copilot</div>
         <div className="phase-indicator">
           <div className="phase-dot pulse" />
-          <span className="phase-label">Phase 2 — Business Context</span>
+          <span className="phase-label">Phase 3 — Problem Discovery</span>
         </div>
       </div>
 
-      {/* Role badge so participant sees this is tailored to them */}
-      <div style={{
-        padding: '8px 22px',
-        background: 'var(--accent-light)',
-        borderBottom: '1px solid var(--border)',
-        display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0,
-      }}>
-        <span style={{ fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--accent)' }}>
-          Questions tailored for
-        </span>
-        <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', fontFamily: 'var(--font-h)' }}>
-          {role}
-        </span>
-      </div>
-
       <div className="step-track">
-        {['Objectives', 'Growth', 'Challenges', 'Insights'].map((s, i) => (
-          <div key={s} className={`step-item ${i <= stepIdx ? 'active' : ''} ${i < stepIdx ? 'done' : ''}`}>
-            <div className="step-dot">{i < stepIdx ? '✓' : i + 1}</div>
-            <span className="step-name">{s}</span>
-          </div>
-        ))}
+        {['Submit Problems', 'Problem Clusters'].map((s, i) => {
+          const idx = ['submit', 'clusters'].indexOf(step)
+          return (
+            <div key={s} className={`step-item ${i <= idx ? 'active' : ''} ${i < idx ? 'done' : ''}`}>
+              <div className="step-dot">{i < idx ? '✓' : i + 1}</div>
+              <span className="step-name">{s}</span>
+            </div>
+          )
+        })}
       </div>
 
       <div className="live-bar">
         <span className="live-dot pulse" />
-        <span className="live-text">{liveCount} participant{liveCount !== 1 ? 's' : ''} active in this phase</span>
+        <span className="live-text">{liveCount} participant{liveCount !== 1 ? 's' : ''} submitting problems</span>
       </div>
 
       <div className="phase-body">
 
-        {/* ── STEP 1: Objectives ── */}
-        {step === 'objectives' && (
+        {/* ── STEP 1: Submit ── */}
+        {step === 'submit' && (
           <div className="fade-up">
             <div className="phase-title-block">
-              <p className="badge badge-accent">Step 1 of 3</p>
-              <h2 className="phase-title">{config.objectiveTitle}</h2>
-              <p className="phase-desc">{config.objectiveDesc}</p>
-            </div>
-
-            <div className="objective-grid">
-              {allObjectives.map(obj => (
-                <button
-                  key={obj.id}
-                  className={`objective-card ${objectives.includes(obj.id) ? 'selected' : ''}`}
-                  onClick={() => toggleObjective(obj.id)}
-                  type="button"
-                >
-                  <div className="obj-top-row">
-                    <span className="obj-icon">{obj.icon}</span>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                      {obj.custom && (
-                        <span
-                          style={{ fontSize: 11, color: 'var(--text-3)', cursor: 'pointer', padding: '0 2px' }}
-                          onClick={e => { e.stopPropagation(); removeCustomObjective(obj.id) }}
-                          title="Remove"
-                        >✕</span>
-                      )}
-                      <span className="obj-check">{objectives.includes(obj.id) ? '✓' : ''}</span>
-                    </div>
-                  </div>
-                  <span className="obj-label">{obj.label}</span>
-                  <span className="obj-desc">{obj.custom ? 'Custom objective' : obj.desc}</span>
-                </button>
-              ))}
-            </div>
-
-            {/* Add custom objective */}
-            {showObjInput ? (
-              <div className="custom-add-row">
-                <input
-                  className="input custom-add-input"
-                  placeholder="Describe your objective..."
-                  value={customObjective}
-                  onChange={e => setCustomObjective(e.target.value)}
-                  onKeyDown={e => { if (e.key === 'Enter') addCustomObjective(); if (e.key === 'Escape') setShowObjInput(false) }}
-                  autoFocus
-                  maxLength={60}
-                />
-                <button className="btn btn-primary btn-sm" onClick={addCustomObjective} disabled={customObjective.trim().length < 3} type="button">Add</button>
-                <button className="btn btn-ghost btn-sm" onClick={() => { setShowObjInput(false); setCustomObjective('') }} type="button">✕</button>
-              </div>
-            ) : (
-              <button className="custom-add-trigger" onClick={() => setShowObjInput(true)} type="button">
-                + Add your own objective
-              </button>
-            )}
-
-            <div className="selected-count">{objectives.length} selected</div>
-          </div>
-        )}
-
-        {/* ── STEP 2: Growth ── */}
-        {step === 'growth' && (
-          <div className="fade-up">
-            <div className="phase-title-block">
-              <p className="badge badge-accent">Step 2 of 3</p>
-              <h2 className="phase-title">{config.growthTitle}</h2>
-              <p className="phase-desc">Choose the initiatives you are most focused on this year.</p>
-            </div>
-
-            <div className="growth-list">
-              {config.growthOptions.map(g => (
-                <button
-                  key={g}
-                  className={`growth-item ${growthAreas.includes(g) ? 'selected' : ''}`}
-                  onClick={() => toggleGrowth(g)}
-                  type="button"
-                >
-                  <span className="growth-check">{growthAreas.includes(g) ? '✓' : '○'}</span>
-                  <span className="growth-label">{g}</span>
-                </button>
-              ))}
-              {customGrowths.map(g => (
-                <div key={g} className={`growth-item selected custom-growth-item`}>
-                  <span className="growth-check">✓</span>
-                  <span className="growth-label" style={{ flex: 1 }}>{g}</span>
-                  <button
-                    style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 11, color: 'var(--text-3)', padding: '0 4px', flexShrink: 0 }}
-                    onClick={() => removeCustomGrowth(g)}
-                    type="button"
-                    title="Remove"
-                  >✕</button>
-                </div>
-              ))}
-            </div>
-
-            {showGrowthInput ? (
-              <div className="custom-add-row">
-                <input
-                  className="input custom-add-input"
-                  placeholder="Describe your growth priority..."
-                  value={customGrowth}
-                  onChange={e => setCustomGrowth(e.target.value)}
-                  onKeyDown={e => { if (e.key === 'Enter') addCustomGrowth(); if (e.key === 'Escape') setShowGrowthInput(false) }}
-                  autoFocus
-                  maxLength={80}
-                />
-                <button className="btn btn-primary btn-sm" onClick={addCustomGrowth} disabled={customGrowth.trim().length < 3} type="button">Add</button>
-                <button className="btn btn-ghost btn-sm" onClick={() => { setShowGrowthInput(false); setCustomGrowth('') }} type="button">✕</button>
-              </div>
-            ) : (
-              <button className="custom-add-trigger" onClick={() => setShowGrowthInput(true)} type="button">
-                + Add your own priority
-              </button>
-            )}
-          </div>
-        )}
-
-        {/* ── STEP 3: Challenges ── */}
-        {step === 'challenges' && (
-          <div className="fade-up">
-            <div className="phase-title-block">
-              <p className="badge badge-accent">Step 3 of 3</p>
-              <h2 className="phase-title">One question<br />from the AI</h2>
-              <p className="phase-desc">The agent will ask you a tailored question based on your {role} role. Answer in your own words.</p>
-            </div>
-
-            <div className="phase-form">
-              <AgentChat
-                key={role}
-                questions={[{
-                  id: 'challenge',
-                  question: config.challengePrompt,
-                  hint: config.challengeHint,
-                  placeholder: 'Describe it in your own words — the more specific, the better.',
-                  field: 'challenges',
-                  required: true,
-                }]}
-                agentName="Insight Mining Agent"
-                agentAvatar="◈"
-                apiBase={window.__API_BASE__ || ''}
-                onComplete={(answers) => setChallenges(answers.challenges || '')}
-              />
-
-              {/* Summary of selections */}
-              <div className="summary-card">
-                <p className="summary-title">Your selections</p>
-                <div className="summary-chips">
-                  {objectives.map(id => {
-                    const o = allObjectives.find(x => x.id === id)
-                    if (!o) return null
-                    return (
-                      <span key={id} className={`chip${o.custom ? ' chip-custom' : ''}`}>
-                        {o.icon} {o.label}
-                        {o.custom && <span style={{ fontSize: 9, marginLeft: 4, opacity: 0.7 }}>custom</span>}
-                      </span>
-                    )
-                  })}
-                </div>
-                <div className="summary-chips" style={{ marginTop: 8 }}>
-                  {growthAreas.map(g => {
-                    const isCustom = customGrowths.includes(g)
-                    return (
-                      <span key={g} className={`chip chip-green${isCustom ? ' chip-custom' : ''}`}>
-                        {g}
-                        {isCustom && <span style={{ fontSize: 9, marginLeft: 4, opacity: 0.7 }}>custom</span>}
-                      </span>
-                    )
-                  })}
-                </div>
-              </div>
-
-              {error && <div className="error-banner">⚠ {error}</div>}
-            </div>
-          </div>
-        )}
-
-        {/* ── STEP 4: AI Insights ── */}
-        {step === 'insights' && insights && (
-          <div className="fade-up">
-            <div className="phase-title-block">
-              <p className="badge badge-accent">Objective Map</p>
-              <h2 className="phase-title">Your strategic context<br />has been captured</h2>
+              <p className="badge badge-accent">Problem Identification</p>
+              <h2 className="phase-title">What slows your<br />team down the most?</h2>
               <p className="phase-desc">
-                The AI has built your business objective map using your {role} perspective.
-                This will shape the AI use cases generated later in the session.
+                Describe up to 5 problems. For each one, walk us through
+                your current workflow — this helps the AI identify exactly
+                which steps can be automated.
               </p>
             </div>
 
-            <div className="insight-clusters">
-              {insights.clusters?.map((cluster, i) => (
-                <div key={i} className="insight-cluster">
-                  <div className="cluster-header">
-                    <span className="cluster-icon">{cluster.icon || '◈'}</span>
-                    <span className="cluster-theme">{cluster.theme}</span>
-                    <span className="badge badge-accent">{cluster.signals} signal{cluster.signals !== 1 ? 's' : ''}</span>
+            <div className="problems-list">
+              {problems.map((problem, idx) => (
+                <div
+                  key={problem.id}
+                  className="problem-card fade-up"
+                  style={{ animationDelay: `${idx * 0.06}s` }}
+                >
+                  {/* Header */}
+                  <div className="problem-card-header">
+                    <span className="problem-num">Problem {idx + 1}</span>
+                    {problems.length > 1 && (
+                      <button className="remove-btn" onClick={() => removeProblem(problem.id)}>✕</button>
+                    )}
                   </div>
-                  <p className="cluster-summary">{cluster.summary}</p>
-                  {cluster.ai_potential && (
-                    <div className="cluster-potential">
-                      <span className="potential-label">AI Opportunity →</span>
-                      <span className="potential-text">{cluster.ai_potential}</span>
+
+                  {/* Problem description */}
+                  <textarea
+                    className="input"
+                    rows={3}
+                    placeholder={
+                      idx === 0
+                        ? 'e.g. Our team manually copies data from emails into our CRM every day — takes 2+ hours and causes errors...'
+                        : 'Describe another operational problem...'
+                    }
+                    value={problem.text}
+                    onChange={e => updateProblem(problem.id, 'text', e.target.value)}
+                    style={{ resize: 'vertical' }}
+                  />
+
+                  {/* Tags */}
+                  <div className="tag-row">
+                    <span className="tag-label">Characteristics:</span>
+                    <div className="tag-group">
+                      {PROBLEM_TAGS.map(tag => (
+                        <button
+                          key={tag}
+                          className={`tag-btn ${problem.tags.includes(tag) ? 'selected' : ''}`}
+                          onClick={() => toggleTag(problem.id, tag)}
+                          type="button"
+                        >
+                          {tag}
+                        </button>
+                      ))}
                     </div>
-                  )}
+                  </div>
+
+                  {/* Severity */}
+                  <div className="severity-row">
+                    <span className="tag-label">Severity:</span>
+                    <div className="severity-track">
+                      {[1, 2, 3, 4, 5].map(n => (
+                        <button
+                          key={n}
+                          className={`severity-btn ${problem.severity === n ? 'selected' : ''}`}
+                          style={problem.severity === n
+                            ? { borderColor: SEVERITY_LABELS[n].color, color: SEVERITY_LABELS[n].color }
+                            : {}}
+                          onClick={() => updateProblem(problem.id, 'severity', n)}
+                          type="button"
+                        >
+                          {n}
+                        </button>
+                      ))}
+                      <span className="severity-desc" style={{ color: SEVERITY_LABELS[problem.severity]?.color }}>
+                        {SEVERITY_LABELS[problem.severity]?.label}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* ── WORKFLOW FIELD ── */}
+                  <div className="workflow-field">
+                    <div className="workflow-field-header">
+                      <span className="tag-label">Your current workflow</span>
+                      <span className="workflow-optional">optional — but helps the AI spot automation points</span>
+                    </div>
+                    <textarea
+                      className="input workflow-textarea"
+                      rows={3}
+                      placeholder={workflowPlaceholder}
+                      value={problem.workflow_description}
+                      onChange={e => updateProblem(problem.id, 'workflow_description', e.target.value)}
+                      style={{ resize: 'vertical' }}
+                    />
+                    {problem.workflow_description?.trim().length > 10 && (
+                      <div className="workflow-steps-preview">
+                        {detectSteps(problem.workflow_description).map((step, i) => (
+                          <span key={i} className="workflow-step-chip">
+                            {i + 1}. {step}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
                 </div>
               ))}
             </div>
 
-            {insights.dominant_theme && (
-              <div className="dominant-theme-box">
-                <span className="dominant-label">Dominant Theme</span>
-                <span className="dominant-value">{insights.dominant_theme}</span>
+            {problems.length < 5 && (
+              <button className="add-problem-btn" onClick={addProblem} type="button">
+                + Add another problem
+              </button>
+            )}
+
+            {/* Workflow fill-in nudge */}
+            {validProblems.length > 0 && workflowCount === 0 && (
+              <div className="workflow-nudge">
+                <span className="workflow-nudge-icon">◈</span>
+                <span className="workflow-nudge-text">
+                  Adding your current workflow helps the AI identify exactly
+                  which steps can be automated — not just that the problem exists.
+                </span>
+              </div>
+            )}
+
+            {error && <div className="error-banner">⚠ {error}</div>}
+          </div>
+        )}
+
+        {/* ── STEP 2: Clusters ── */}
+        {step === 'clusters' && (
+          <div className="fade-up">
+            <div className="phase-title-block">
+              <p className="badge badge-accent">Insight Mining Agent</p>
+              <h2 className="phase-title">Problem clusters<br />detected</h2>
+              <p className="phase-desc">
+                Problems and workflows have been analysed and grouped into
+                strategic themes. Manual steps identified in workflows are
+                highlighted as automation targets.
+              </p>
+            </div>
+
+            {clusters ? (
+              <div className="insight-clusters">
+                {clusters.map((cluster, i) => (
+                  <div key={i} className="insight-cluster">
+                    <div className="cluster-header">
+                      <span className="cluster-icon">{cluster.icon || '◈'}</span>
+                      <span className="cluster-theme">{cluster.theme}</span>
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        <span className="badge badge-default">
+                          {cluster.problem_count} problem{cluster.problem_count !== 1 ? 's' : ''}
+                        </span>
+                        {cluster.cross_department && (
+                          <span className="badge badge-green">Cross-dept ⬡</span>
+                        )}
+                        {cluster.manual_steps_identified > 0 && (
+                          <span className="badge badge-amber">
+                            {cluster.manual_steps_identified} manual step{cluster.manual_steps_identified !== 1 ? 's' : ''}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    <p className="cluster-summary">{cluster.summary}</p>
+
+                    {cluster.departments?.length > 0 && (
+                      <div className="cluster-depts">
+                        {cluster.departments.map(d => (
+                          <span key={d} className="chip chip-dim">{d}</span>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Automation targets from workflow analysis */}
+                    {cluster.automation_targets?.length > 0 && (
+                      <div className="automation-targets">
+                        <span className="automation-targets-label">Automatable steps identified →</span>
+                        <div className="automation-targets-list">
+                          {cluster.automation_targets.map((t, ti) => (
+                            <span key={ti} className="automation-target-chip">{t}</span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="cluster-potential">
+                      <span className="potential-label">AI Opportunity →</span>
+                      <span className="potential-text">{cluster.ai_opportunity}</span>
+                    </div>
+
+                    <div className="severity-bar-row">
+                      <span className="severity-bar-label">Avg severity</span>
+                      <div className="severity-bar-track">
+                        <div
+                          className="severity-bar-fill"
+                          style={{ width: `${(cluster.avg_severity / 5) * 100}%` }}
+                        />
+                      </div>
+                      <span className="severity-bar-val">{cluster.avg_severity?.toFixed(1)}/5</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="ai-thinking">
+                <div className="thinking-dots">
+                  <span className="thinking-dot" />
+                  <span className="thinking-dot" style={{ animationDelay: '0.2s' }} />
+                  <span className="thinking-dot" style={{ animationDelay: '0.4s' }} />
+                </div>
+                <p className="thinking-label">Analysing problems and workflows...</p>
+                <p className="thinking-sub">Clustering themes · Detecting manual steps · Identifying automation targets</p>
+              </div>
+            )}
+
+            {liveProblems.length > validProblems.length && (
+              <div className="live-problems-box">
+                <p className="live-problems-title">
+                  <span className="live-dot pulse" style={{ marginRight: 8 }} />
+                  {liveProblems.length} total problems submitted by all participants
+                </p>
               </div>
             )}
           </div>
         )}
-
-        {/* Loading while AI processes */}
-        {step === 'insights' && !insights && (
-          <div className="ai-thinking fade-up">
-            <div className="thinking-dots">
-              <span className="thinking-dot" style={{ animationDelay: '0s' }} />
-              <span className="thinking-dot" style={{ animationDelay: '0.2s' }} />
-              <span className="thinking-dot" style={{ animationDelay: '0.4s' }} />
-            </div>
-            <p className="thinking-label">Insight Mining Agent is processing your {role} perspective...</p>
-            <p className="thinking-sub">Clustering objectives · Detecting patterns · Building objective map</p>
-          </div>
-        )}
-
       </div>
 
       {/* Footer */}
       <div className="phase-footer">
-        {step !== 'objectives' && step !== 'insights' && (
-          <button className="btn btn-ghost" onClick={() => setStep(steps[stepIdx - 1])}>
-            ← Back
-          </button>
-        )}
-        {step === 'objectives' && (
+        {step === 'submit' && (
           <>
             <div />
             <button
               className="btn btn-primary"
-              disabled={objectives.length === 0}
-              onClick={() => setStep('growth')}
+              disabled={validProblems.length === 0 || submitting}
+              onClick={handleSubmit}
             >
-              Continue →
+              {submitting
+                ? <><span className="spinner spinner-blue" /> Analysing...</>
+                : `Submit ${validProblems.length} Problem${validProblems.length !== 1 ? 's' : ''} →`}
             </button>
           </>
         )}
-        {step === 'growth' && (
-          <button
-            className="btn btn-primary"
-            disabled={growthAreas.length === 0}
-            onClick={() => setStep('challenges')}
-          >
-            Continue →
-          </button>
-        )}
-        {step === 'challenges' && (
-          <button
-            className="btn btn-primary"
-            disabled={!canSubmit || submitting}
-            onClick={handleSubmit}
-          >
-            {submitting
-              ? <><span className="spinner spinner-blue" /> Analysing...</>
-              : 'Generate Objective Map →'}
-          </button>
-        )}
-        {step === 'insights' && insights && (
+        {step === 'clusters' && clusters && (
           <>
             <div />
             <button className="btn btn-primary" onClick={onComplete}>
-              Proceed to Problem Discovery →
+              Proceed to Activities →
             </button>
           </>
         )}
       </div>
     </div>
   )
+}
+
+// ── Utility: detect discrete steps from workflow text ──────────────────────
+// Splits workflow description into recognisable step chunks for the preview
+function detectSteps(text) {
+  if (!text || text.trim().length < 20) return []
+  // Split on numbered lists, "then", "after that", "next", commas between verbs
+  const parts = text
+    .split(/(?:\d+\.\s|\bthen\b|\bafter that\b|\bnext\b|\bfinally\b)/i)
+    .map(s => s.replace(/[,;]+$/, '').trim())
+    .filter(s => s.length > 8 && s.length < 80)
+    .slice(0, 5)
+  return parts.length > 1 ? parts : []
 }

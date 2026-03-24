@@ -115,53 +115,79 @@ export default function VoiceTextInput({
   // ── Speech recognition ───────────────────────────────────────────────────
   const startRecording = () => {
     setMicError(null)
+    console.log('[VoiceTextInput] startRecording called')
 
     const SpeechRecognition =
       window.SpeechRecognition || window.webkitSpeechRecognition
     if (!SpeechRecognition) {
-      setMicError('Speech recognition not supported in this browser. Please type your answer.')
+      const errMsg = 'Speech recognition not supported in this browser. Please use Chrome or Edge.'
+      console.warn('[VoiceTextInput]', errMsg)
+      setMicError(errMsg)
       return
     }
 
-    const recognition = new SpeechRecognition()
-    recognition.continuous     = true
-    recognition.interimResults = true
-    recognition.lang           = 'en-US'
-    recognitionRef.current = recognition
+    try {
+      const recognition = new SpeechRecognition()
+      recognition.continuous     = true
+      recognition.interimResults = true
+      recognition.lang           = 'en-US'
+      recognitionRef.current = recognition
 
-    recognition.onstart = () => setMicState(MIC_STATES.recording)
-
-    recognition.onresult = (e) => {
-      let interim = ''
-      let final   = ''
-      for (let i = e.resultIndex; i < e.results.length; i++) {
-        if (e.results[i].isFinal) final   += e.results[i][0].transcript
-        else                       interim += e.results[i][0].transcript
+      recognition.onstart = () => {
+        console.log('[VoiceTextInput] Recording started')
+        setMicState(MIC_STATES.recording)
       }
-      // Show live preview
-      setLiveTranscript(interim)
-      // Append confirmed final text to existing value
-      if (final) {
-        const separator = valueRef.current.trim().length > 0 ? ' ' : ''
-        onChangeRef.current(valueRef.current + separator + final)
+
+      recognition.onresult = (e) => {
+        let interim = ''
+        let final   = ''
+        for (let i = e.resultIndex; i < e.results.length; i++) {
+          if (e.results[i].isFinal) final   += e.results[i][0].transcript
+          else                       interim += e.results[i][0].transcript
+        }
+        setLiveTranscript(interim)
+        if (final) {
+          console.log('[VoiceTextInput] Final transcript:', final)
+          const separator = valueRef.current.trim().length > 0 ? ' ' : ''
+          onChangeRef.current(valueRef.current + separator + final)
+          setLiveTranscript('')
+        }
+      }
+
+      recognition.onerror = (e) => {
+        if (e.error === 'aborted') {
+          // Normal — happens when recognition is stopped programmatically, not a real error
+          setMicState(MIC_STATES.idle)
+          setLiveTranscript('')
+          return
+        }
+
+        console.error('[VoiceTextInput] Recognition error:', e.error)
+        if (e.error === 'not-allowed') {
+          setMicError('Microphone access denied. Please allow mic access in your browser settings.')
+        } else if (e.error === 'no-speech') {
+          setMicError('No speech detected. Please try again and speak clearly.')
+        } else if (e.error === 'network') {
+          setMicError('Network error during speech recognition. Check your connection.')
+        } else {
+          setMicError(`Mic error: ${e.error}. Please try again.`)
+        }
+        setMicState(MIC_STATES.idle)
         setLiveTranscript('')
       }
-    }
 
-    recognition.onerror = (e) => {
-      if (e.error === 'not-allowed') {
-        setMicError('Microphone access denied. Please allow mic access in your browser settings.')
+      recognition.onend = () => {
+        console.log('[VoiceTextInput] Recording ended')
+        setLiveTranscript('')
+        setMicState(prev => prev === MIC_STATES.recording ? MIC_STATES.idle : prev)
       }
+
+      recognition.start()
+    } catch (err) {
+      console.error('[VoiceTextInput] Failed to start recognition:', err)
+      setMicError('Failed to start microphone. Please check browser permissions.')
       setMicState(MIC_STATES.idle)
-      setLiveTranscript('')
     }
-
-    recognition.onend = () => {
-      setLiveTranscript('')
-      setMicState(prev => prev === MIC_STATES.recording ? MIC_STATES.idle : prev)
-    }
-
-    recognition.start()
   }
 
   const stopRecording = () => {

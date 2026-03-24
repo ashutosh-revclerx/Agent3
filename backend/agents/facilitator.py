@@ -85,3 +85,112 @@ def get_waiting_message(phase: str, submitted: int, total: int) -> str:
         f"{submitted} of {total} participants have submitted. "
         f"Waiting for {remaining} more response{'s' if remaining > 1 else ''}..."
     )
+
+def process_onboarding_chat(messages, name: str, role: str, department: str) -> dict:
+    """
+    Handles the interactive voice interview during onboarding.
+    Ensures context-aware follow-up questions and limits to MAX_QUESTIONS.
+    Returns JSON dict with done, next_question, and extracted_data.
+    """
+    from gemini_client import gemini_json_with_system
+    import traceback
+    
+    MAX_QUESTIONS = 4
+    
+    # Extract conversation state
+    user_msgs = [m.text for m in messages if m.type == 'user']
+    agent_msgs = [m.text for m in messages if m.type == 'agent']
+    num_user_replies = len(user_msgs)
+    latest_user_msg = user_msgs[-1].strip() if user_msgs else ""
+    
+    # Step 0: User said hello → ask the first real question
+    is_greeting = latest_user_msg.lower() in ['hello', 'hi', 'hey', 'hi there', 'hello!', 'hey!', 'start', 'hey there']
+    
+    if is_greeting or num_user_replies == 0:
+        first_q = f"Great to have you here! As a {role}, I'd love to understand your work. Can you walk me through what a typical workday looks like for you — the main tasks, tools, and how information flows?"
+        return {"done": False, "next_question": first_q}
+    
+    # Step 1+: We have real user answers — use the LLM for contextual follow-ups
+    num_real_answers = len([u for u in user_msgs if u.lower() not in ['hello', 'hi', 'hey', 'hi there', 'hello!', 'hey!', 'start', 'hey there']])
+    is_last_chance = (num_real_answers >= MAX_QUESTIONS)
+    too_early = (num_real_answers < 2)
+    
+    history = "\n".join([f"{m.type.capitalize()}: {m.text}" for m in messages[-12:]])
+    
+    sys_prompt = f"""You are a friendly AI facilitator having a voice conversation with {name or 'a participant'}, a {role} from {department}.
+
+YOUR GOAL: Understand their daily workflow and biggest challenges so you can recommend AI solutions.
+
+CONVERSATION STATE: {num_real_answers} substantive answers received. {"FINAL TURN — wrap up now." if is_last_chance else ""}
+
+HOW TO RESPOND:
+- Start by briefly acknowledging something SPECIFIC the user just said (e.g. "So you spend a lot of time on [X]...")
+- Then ask ONE short follow-up question (under 20 words) that digs deeper into what they described.
+- Your follow-up should focus on: tools used, time spent, manual vs automated, pain points, or errors.
+
+{"You MUST set done to false — you need more information." if too_early else ""}
+{"You MUST set done to true and provide extracted_data now." if is_last_chance else ""}
+
+Output ONLY valid JSON:
+{{
+  "done": {str(is_last_chance).lower()},
+  "next_question": "acknowledgment + follow-up question",
+  "closing_message": "brief closing (only if done is true)",
+  "extracted_data": {{
+     "daily_work": "summary of their workflow",
+     "top_challenge": "summary of their main pain point"
+  }}
+}}"""
+    
+    prompt = f"Conversation:\n{history}\n\nJSON:"
+    
+    try:
+        res = gemini_json_with_system(prompt, sys_prompt)
+        print(f"[facilitator-chat] LLM response: {res}")
+    except Exception as e:
+        print(f"[facilitator-chat] LLM error: {e}")
+        traceback.print_exc()
+        res = None
+    
+    # ── Fallback: build a contextual follow-up from the user's own words ──
+    if not res or not isinstance(res, dict):
+        print(f"[facilitator-chat] Using fallback. num_real_answers={num_real_answers}")
+        
+        # Extract keywords from the user's last message for context
+        last_words = latest_user_msg.split()
+        snippet = " ".join(last_words[:8]) if len(last_words) > 3 else latest_user_msg
+        
+        if is_last_chance or num_real_answers >= 3:
+            return {
+                "done": True,
+                "closing_message": "Thanks for sharing all of that — I have a good picture now. Let's move forward!",
+                "extracted_data": {
+                    "daily_work": " ".join(user_msgs[:2]) if len(user_msgs) >= 2 else latest_user_msg,
+                    "top_challenge": user_msgs[-1] if len(user_msgs) > 1 else ""
+                }
+            }
+        
+        # Contextual fallbacks that reference the user's answer
+        fallbacks_by_step = [
+            f"Thanks for sharing that. You mentioned \"{snippet}\" — what tools or software do you use for that?",
+            f"Got it. Of everything you've described, what feels the most repetitive or time-consuming?",
+            f"That's helpful. What's the biggest challenge or bottleneck you face in your current workflow?",
+        ]
+        idx = min(num_real_answers - 1, len(fallbacks_by_step) - 1)
+        return {"done": False, "next_question": fallbacks_by_step[max(0, idx)]}
+    
+    # ── Server-side enforcement ──
+    if too_early and res.get("done"):
+        res["done"] = False
+    
+    if is_last_chance:
+        res["done"] = True
+        if not res.get("closing_message"):
+            res["closing_message"] = "Thanks — I have a clear picture. Let's continue."
+        if not res.get("extracted_data"):
+            res["extracted_data"] = {
+                "daily_work": " ".join(user_msgs[:2]),
+                "top_challenge": user_msgs[-1] if len(user_msgs) > 1 else ""
+            }
+    
+    return res
