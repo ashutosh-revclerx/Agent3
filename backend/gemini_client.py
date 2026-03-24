@@ -7,6 +7,7 @@ All agents import gemini_json() and gemini_text() from here.
 Install: pip install google-genai
 Docs:    https://googleapis.github.io/python-genai/
 """
+import ast
 import os, json, re
 from pathlib import Path
 from google import genai
@@ -18,6 +19,119 @@ load_dotenv(ENV_PATH)
 
 # ── Singleton client ──────────────────────────────────────────────────────────
 _client: genai.Client | None = None
+
+
+def _strip_code_fences(text: str) -> str:
+    text = text.strip()
+    text = re.sub(r"^```(?:json)?\s*", "", text)
+    text = re.sub(r"\s*```$", "", text)
+    return text.strip()
+
+
+def _extract_json_candidate(text: str) -> str:
+    start = next((i for i, ch in enumerate(text) if ch in "{["), -1)
+    if start == -1:
+        return text.strip()
+
+    stack = []
+    in_string = False
+    escape = False
+
+    for i in range(start, len(text)):
+        ch = text[i]
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+
+        if ch == '"':
+            in_string = True
+        elif ch in "{[":
+            stack.append("}" if ch == "{" else "]")
+        elif ch in "}]":
+            if not stack or ch != stack[-1]:
+                continue
+            stack.pop()
+            if not stack:
+                return text[start:i + 1].strip()
+
+    return text[start:].strip()
+
+
+def _escape_control_chars_in_strings(text: str) -> str:
+    chars = []
+    in_string = False
+    escape = False
+
+    for ch in text:
+        if in_string:
+            if escape:
+                chars.append(ch)
+                escape = False
+                continue
+            if ch == "\\":
+                chars.append(ch)
+                escape = True
+                continue
+            if ch == '"':
+                chars.append(ch)
+                in_string = False
+                continue
+            if ch == "\n":
+                chars.append("\\n")
+                continue
+            if ch == "\r":
+                chars.append("\\r")
+                continue
+            if ch == "\t":
+                chars.append("\\t")
+                continue
+            chars.append(ch)
+            continue
+
+        chars.append(ch)
+        if ch == '"':
+            in_string = True
+
+    return "".join(chars)
+
+
+def _parse_json_response(text: str):
+    cleaned = _strip_code_fences(text)
+    candidates = []
+
+    for candidate in (
+        cleaned,
+        _extract_json_candidate(cleaned),
+        _escape_control_chars_in_strings(cleaned),
+        _escape_control_chars_in_strings(_extract_json_candidate(cleaned)),
+    ):
+        candidate = candidate.strip()
+        if candidate and candidate not in candidates:
+            candidates.append(candidate)
+
+    last_error = None
+    for candidate in candidates:
+        try:
+            return json.loads(candidate)
+        except Exception as exc:
+            last_error = exc
+
+    for candidate in candidates:
+        try:
+            parsed = ast.literal_eval(candidate)
+            if isinstance(parsed, (dict, list)):
+                return parsed
+        except Exception as exc:
+            last_error = exc
+
+    if last_error:
+        raise last_error
+    raise ValueError("Gemini did not return JSON content.")
 
 def get_client() -> genai.Client | None:
     """
@@ -64,13 +178,11 @@ def gemini_json(prompt: str, model: str = DEFAULT_MODEL) -> dict | list | None:
             config=types.GenerateContentConfig(
                 temperature=0.3,          # low temp = consistent JSON
                 max_output_tokens=2048,
+                response_mime_type="application/json",
             ),
         )
-        text = response.text.strip()
-        # Strip ```json ... ``` or ``` ... ``` fences
-        text = re.sub(r'^```(?:json)?\s*', '', text)
-        text = re.sub(r'\s*```$', '', text)
-        return json.loads(text.strip())
+        text = response.text or ""
+        return _parse_json_response(text)
     except Exception as e:
         print(f"gemini_json error: {e}")
         return None
@@ -127,12 +239,11 @@ def gemini_json_with_system(prompt: str, system: str,
             config=types.GenerateContentConfig(
                 temperature=0.2,
                 max_output_tokens=2048,
+                response_mime_type="application/json",
             ),
         )
-        text = response.text.strip()
-        text = re.sub(r'^```(?:json)?\s*', '', text)
-        text = re.sub(r'\s*```$', '', text)
-        return json.loads(text.strip())
+        text = response.text or ""
+        return _parse_json_response(text)
     except Exception as e:
         print(f"gemini_json_with_system error: {e}")
         return None
