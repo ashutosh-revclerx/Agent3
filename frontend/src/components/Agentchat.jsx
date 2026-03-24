@@ -7,6 +7,7 @@ const nextId = () => ++msgId
 export default function AgentChat({
   questions = [],
   onComplete,
+  onStepComplete,
   agentName = 'AI Facilitator',
   agentAvatar = '◇',
   apiBase = '',
@@ -27,6 +28,8 @@ export default function AgentChat({
   const lastSpokenTextRef = useRef(null)
 
   const currentQ = questions[currentIdx]
+  const questionsRef = useRef(questions)
+  useEffect(() => { questionsRef.current = questions }, [questions])
 
   // ── TTS: Speak text via ElevenLabs (managed here, not in VoiceTextInput) ──
   const stopAudio = () => {
@@ -41,43 +44,66 @@ export default function AgentChat({
     setIsAgentSpeaking(false)
   }
 
+  const speakAbortRef = useRef(null)
+
   const speakText = async (text) => {
     if (!text || !apiBase) return
-    // Skip if we already spoke this exact text
     if (lastSpokenTextRef.current === text) return
     lastSpokenTextRef.current = text
 
-    // Stop any currently playing audio first
     stopAudio()
     setIsAgentSpeaking(true)
 
-    try {
-      const res = await fetch(`${apiBase}/ai/speak`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'ngrok-skip-browser-warning': 'true',
-        },
-        body: JSON.stringify({ text: text.slice(0, 500) }),
-      })
-      if (!res.ok) throw new Error('speak failed')
-      const blob = await res.blob()
-      const url = URL.createObjectURL(blob)
-      audioUrlRef.current = url
-      const audio = new Audio(url)
-      audioRef.current = audio
-      audio.onended = () => {
-        setIsAgentSpeaking(false)
-        if (audioUrlRef.current) {
-          URL.revokeObjectURL(audioUrlRef.current)
-          audioUrlRef.current = null
+    if (speakAbortRef.current) speakAbortRef.current.abort()
+    const controller = new AbortController()
+    speakAbortRef.current = controller
+
+    const attempt = async (retriesLeft) => {
+      try {
+        const res = await fetch(`${apiBase}/ai/speak`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'ngrok-skip-browser-warning': 'true',
+          },
+          body: JSON.stringify({ text: text.slice(0, 500) }),
+          signal: controller.signal,
+        })
+        if (!res.ok) throw new Error(`speak HTTP ${res.status}`)
+
+        const buffer = await res.arrayBuffer()
+        if (controller.signal.aborted) return
+        if (!buffer || buffer.byteLength < 100) throw new Error('speak: response too small')
+
+        const blob = new Blob([buffer], { type: 'audio/mpeg' })
+        const url = URL.createObjectURL(blob)
+        audioUrlRef.current = url
+        const audio = new Audio(url)
+        audioRef.current = audio
+        audio.onended = () => {
+          setIsAgentSpeaking(false)
+          if (audioUrlRef.current) {
+            URL.revokeObjectURL(audioUrlRef.current)
+            audioUrlRef.current = null
+          }
+        }
+        audio.onerror = () => {
+          setIsAgentSpeaking(false)
+          if (retriesLeft > 0) setTimeout(() => attempt(retriesLeft - 1), 800)
+        }
+        audio.play().catch(() => setIsAgentSpeaking(false))
+      } catch (err) {
+        if (err.name === 'AbortError') return
+        console.warn('[AgentChat] TTS error:', err.message, retriesLeft > 0 ? '— retrying' : '— skipping')
+        if (retriesLeft > 0) {
+          setTimeout(() => attempt(retriesLeft - 1), 1000)
+        } else {
+          setIsAgentSpeaking(false)
         }
       }
-      audio.onerror = () => setIsAgentSpeaking(false)
-      audio.play()
-    } catch {
-      setIsAgentSpeaking(false)
     }
+
+    attempt(1)
   }
 
   // Cleanup on unmount
@@ -200,13 +226,19 @@ export default function AgentChat({
 
     const nextIdx = currentIdx + 1
 
+    // Fire onStepComplete so the parent can react (e.g. build a dynamic next question)
+    onStepComplete?.(currentQ.field, val)
+
     if (nextIdx < questions.length) {
       setTimeout(() => {
         setCurrentIdx(nextIdx)
         const acks = ['Got it.', 'Thanks for sharing that.', 'Noted.', "That's helpful context.", 'Understood.']
         const ack = acks[Math.floor(Math.random() * acks.length)]
-        const fullText = `${ack} ${questions[nextIdx].question}`
-        pushAgentMessage(fullText, questions[nextIdx].hint, true)
+        // Read from ref so we always get the latest question text,
+        // even if the parent updated it via onStepComplete after this timeout was scheduled
+        const nextQ = questionsRef.current[nextIdx]
+        const fullText = `${ack} ${nextQ.question}`
+        pushAgentMessage(fullText, nextQ.hint, true)
         setSubmitting(false)
       }, 600)
     } else {

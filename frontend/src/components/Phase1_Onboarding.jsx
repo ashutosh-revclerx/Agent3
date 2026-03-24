@@ -84,12 +84,56 @@ export default function Phase1_Onboarding({ api, apiBase, session, role, onCompl
     }
   }
 
+  const [dynamicChallengeQuestion, setDynamicChallengeQuestion] = useState(null)
+
+  // Builds a personalised challenge question by weaving the workflow answer + role together
+  const buildChallengeQuestion = (workflowAnswer) => {
+    if (!workflowAnswer || !selectedRole) return null
+
+    const lower = workflowAnswer.toLowerCase()
+
+    // Pick out any tools/systems the user mentioned so the follow-up feels specific
+    const toolKeywords = [
+      'excel', 'spreadsheet', 'crm', 'salesforce', 'hubspot', 'slack',
+      'email', 'jira', 'notion', 'dashboard', 'report', 'database',
+      'pipeline', 'script', 'code', 'meeting', 'call', 'ticket',
+      'invoice', 'forecast', 'powerpoint', 'sheets', 'sql',
+    ]
+    const mentioned = toolKeywords.filter(k => lower.includes(k))
+    const toolPhrase = mentioned.length > 0
+      ? ` — especially around ${mentioned.slice(0, 2).join(' and ')} —`
+      : ''
+
+    const templates = {
+      'CEO / Founder':
+        `Based on what you've just described${toolPhrase}, what's the single thing that's slowing down your ability to scale or make fast decisions right now?`,
+      'CTO / Technology Leader':
+        `Given the workflow you described${toolPhrase}, where does your team hit the most technical friction — deployments, data quality, legacy systems, or something else?`,
+      'COO / Operations':
+        `With the day-to-day you've outlined${toolPhrase}, which operational bottleneck keeps resurfacing in your leadership reviews?`,
+      'Product Manager':
+        `From the workflow you described${toolPhrase}, what's the biggest thing slowing your team's ability to ship valuable product to customers?`,
+      'Data / AI Engineer':
+        `Given what you've described${toolPhrase}, what's the biggest obstacle — data reliability, deployment friction, or tooling gaps — preventing you from delivering AI at production quality?`,
+      'Business Analyst':
+        `Based on your workflow${toolPhrase}, which reporting or analysis task takes the most manual effort and still produces unreliable output?`,
+      'Department Head':
+        `From what you've shared about your day-to-day${toolPhrase}, what keeps your team from performing at their best consistently?`,
+      'Consultant':
+        `Given the workflow you've described${toolPhrase}, what's the most common reason AI initiatives fail to reach production in your experience?`,
+      'Other':
+        `Based on what you've described${toolPhrase}, what's the biggest operational challenge you face day to day?`,
+    }
+
+    return templates[selectedRole] || templates['Other']
+  }
+
   const chatQuestions = useMemo(() => {
     const firstName = name ? name.split(' ')[0] : ''
     const greeting = firstName
       ? `Hey ${firstName}! 👋 I'm your AI facilitator. Say hello to start our conversation!`
       : `Hey there! 👋 I'm your AI facilitator. Say hello to start our conversation!`
-    
+
     return selectedRole
       ? [
           {
@@ -102,15 +146,16 @@ export default function Phase1_Onboarding({ api, apiBase, session, role, onCompl
           },
           {
             id: 'challenge',
-            question: CHALLENGE_QUESTION[selectedRole] || CHALLENGE_QUESTION.Other,
+            // Dynamic question built from the workflow answer; falls back to static if not yet available
+            question: dynamicChallengeQuestion || CHALLENGE_QUESTION[selectedRole] || CHALLENGE_QUESTION.Other,
             hint: CHALLENGE_HINT[selectedRole] || CHALLENGE_HINT.default,
             placeholder: 'Describe it in your own words - specific examples help most.',
             field: 'top_challenge',
             required: true,
-          }
+          },
         ]
       : []
-  }, [selectedRole, name])
+  }, [selectedRole, name, dynamicChallengeQuestion])
 
   return (
     <div className="phase-shell fade-up">
@@ -213,6 +258,13 @@ export default function Phase1_Onboarding({ api, apiBase, session, role, onCompl
                     agentName="Facilitator Agent"
                     agentAvatar="◇"
                     apiBase={apiBase}
+                    onStepComplete={(field, value) => {
+                      // As soon as the workflow answer is in, build the contextual challenge question
+                      if (field === 'daily_work' && value) {
+                        setDailyWork(value)
+                        setDynamicChallengeQuestion(buildChallengeQuestion(value))
+                      }
+                    }}
                     onComplete={(answers) => {
                       setTopChallenge(answers.top_challenge || '')
                       setDailyWork(answers.daily_work || '')
