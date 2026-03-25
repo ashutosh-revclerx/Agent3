@@ -152,7 +152,7 @@ def get_client() -> genai.Client | None:
 
 # ── Model name ────────────────────────────────────────────────────────────────
 DEFAULT_MODEL = "gemini-2.5-pro"   # fast + cheap for workshop use
-PRO_MODEL     = "gemini-1.5-pro"     # use for complex reasoning (deck builder)
+PRO_MODEL     = "gemini-2.5-pro"     # use for complex reasoning (deck builder)
 
 
 # ── Core helpers ──────────────────────────────────────────────────────────────

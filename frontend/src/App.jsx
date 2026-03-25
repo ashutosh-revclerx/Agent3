@@ -5,6 +5,7 @@ import Phase0_Setup from './components/Phase0_Setup';
 import Phase1_Onboarding from './components/Phase1_Onboarding';
 import Phase2_Context from './components/Phase2_Context';
 import Phase3_Problems from './components/Phase3_Problems';
+import Phase4_Opportunities from './components/Phase4_opportunities';
 import ActivityA_DataAudit from './components/ActivityA_DataAudit';
 import ActivityB_Confidence from './components/ActivityB_Confidence';
 import ActivityC_PromptEngineering from './components/ActivityC_PromptEngineering';
@@ -35,7 +36,7 @@ const getWsBase = () => API_BASE.replace(/^http/, 'ws');
 
 const PHASES = {
   HOME: 'HOME', SETUP: 'SETUP', ONBOARDING: 'ONBOARDING',
-  CONTEXT: 'CONTEXT', PROBLEMS: 'PROBLEMS',
+  CONTEXT: 'CONTEXT', PROBLEMS: 'PROBLEMS', OPPORTUNITIES: 'OPPORTUNITIES',
   ACTIVITY_A: 'ACTIVITY_A', ACTIVITY_B: 'ACTIVITY_B', ACTIVITY_C: 'ACTIVITY_C',
 };
 
@@ -123,6 +124,11 @@ function App() {
 
       case PHASES.ACTIVITY_C:
         return <ActivityC_PromptEngineering {...shared}
+          onComplete={() => setPhase(PHASES.OPPORTUNITIES)}
+        />;
+
+      case PHASES.OPPORTUNITIES:
+        return <Phase4_Opportunities {...shared}
           onComplete={() => setPhase(PHASES.HOME)}
         />;
 

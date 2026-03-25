@@ -1153,3 +1153,167 @@
   color: var(--green);
   font-family: var(--font-h);
 }
+
+/* ════════════════════════════════════════
+   PHASE 4 — OPPORTUNITY GENERATION
+════════════════════════════════════════ */
+
+/* Loading steps */
+.opp-loading-steps {
+  display: flex; flex-direction: column; gap: 10px;
+  margin-top: 24px; width: 100%; max-width: 320px;
+}
+.opp-loading-step {
+  display: flex; align-items: center; gap: 10px;
+  font-size: 12px; color: var(--text-2);
+  opacity: 0; animation: fadeUp 0.4s ease forwards;
+}
+.opp-loading-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--accent); flex-shrink: 0;
+  animation: pulse 1.5s ease infinite;
+}
+
+/* Verification banner */
+.opp-verif-banner {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 22px;
+  background: var(--green-light);
+  border-bottom: 1px solid rgba(18,160,90,0.2);
+  flex-shrink: 0;
+}
+.opp-verif-icon {
+  width: 18px; height: 18px; border-radius: 50%;
+  background: var(--green); color: #fff;
+  font-size: 10px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.opp-verif-text { font-size: 11px; color: var(--green); font-family: var(--font-h); }
+
+/* Meta bar */
+.opp-meta-bar {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 22px;
+  background: var(--bg-subtle);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.opp-meta-item { display: flex; flex-direction: column; align-items: center; }
+.opp-meta-val { font-family: var(--font-h); font-size: 18px; font-weight: 600; color: var(--text); }
+.opp-meta-lbl { font-size: 10px; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.06em; }
+.opp-meta-sep { font-size: 14px; color: var(--text-3); }
+
+/* Filter bar */
+.opp-filter-bar {
+  display: flex; gap: 6px;
+  padding: 10px 22px;
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0; overflow-x: auto;
+}
+.opp-filter-btn {
+  display: flex; align-items: center; gap: 5px;
+  padding: 5px 12px; border-radius: 20px;
+  border: 1px solid var(--border);
+  background: var(--bg-subtle);
+  font-size: 12px; font-family: var(--font-h); font-weight: 500;
+  color: var(--text-2); cursor: pointer;
+  transition: all 0.15s ease; white-space: nowrap; flex-shrink: 0;
+}
+.opp-filter-btn:hover { border-color: var(--border-mid); color: var(--text); }
+.opp-filter-btn.active {
+  border-color: var(--accent); background: var(--accent-light); color: var(--accent);
+}
+.opp-filter-count {
+  font-size: 10px; font-weight: 600;
+  background: var(--border); color: var(--text-2);
+  padding: 1px 5px; border-radius: 10px;
+}
+.opp-filter-btn.active .opp-filter-count {
+  background: var(--accent-mid); color: var(--accent);
+}
+
+/* Use case grid */
+.opp-grid { display: flex; flex-direction: column; gap: 10px; }
+
+/* Use case card */
+.opp-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: 16px 18px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  box-shadow: var(--shadow);
+  display: flex; flex-direction: column; gap: 10px;
+}
+.opp-card:hover { border-color: var(--border-mid); box-shadow: var(--shadow-md); }
+.opp-card-selected { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(0,102,255,0.10); }
+
+.opp-card-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.opp-pillar-icon { font-size: 16px; color: var(--accent); flex-shrink: 0; }
+.opp-badges { display: flex; gap: 5px; flex-wrap: wrap; }
+
+.opp-title {
+  font-family: var(--font-h); font-size: 14px; font-weight: 600;
+  color: var(--text); line-height: 1.35; margin: 0;
+}
+.opp-desc { font-size: 12px; color: var(--text-2); line-height: 1.65; margin: 0; }
+
+/* Metrics row */
+.opp-metrics {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 14px;
+  background: var(--bg-subtle);
+  border-radius: var(--r-sm);
+}
+.opp-metric { display: flex; flex-direction: column; gap: 2px; flex: 1; }
+.opp-metric-lbl { font-size: 9px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--text-3); font-weight: 600; }
+.opp-metric-val { font-size: 12px; font-weight: 600; font-family: var(--font-h); }
+.opp-metric-div { width: 1px; height: 28px; background: var(--border); flex-shrink: 0; }
+
+/* Source cluster */
+.opp-source { display: flex; align-items: center; gap: 5px; }
+.opp-source-lbl { font-size: 10px; color: var(--text-3); font-style: italic; }
+.opp-source-val { font-size: 11px; color: var(--text-2); font-family: var(--font-h); }
+
+/* Expanded detail */
+.opp-detail {
+  display: flex; flex-direction: column; gap: 10px;
+  padding-top: 12px; border-top: 1px solid var(--border);
+}
+.opp-evidence {
+  background: var(--accent-light);
+  border-left: 2px solid var(--accent);
+  border-radius: 0 var(--r-sm) var(--r-sm) 0;
+  padding: 10px 14px;
+  display: flex; flex-direction: column; gap: 5px;
+}
+.opp-evidence-lbl {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.07em;
+  color: var(--accent); font-weight: 600; font-family: var(--font-h);
+}
+.opp-evidence-text { font-size: 12px; color: var(--text-2); line-height: 1.6; }
+
+.opp-risk {
+  background: var(--amber-light);
+  border-left: 2px solid var(--amber);
+  border-radius: 0 var(--r-sm) var(--r-sm) 0;
+  padding: 10px 14px;
+  display: flex; flex-direction: column; gap: 5px;
+}
+.opp-risk-lbl { font-size: 10px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--amber); font-weight: 600; }
+.opp-risk-text { font-size: 12px; color: var(--text-2); line-height: 1.6; }
+
+.opp-data-req { display: flex; flex-direction: column; gap: 4px; }
+.opp-data-lbl { font-size: 10px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--text-3); font-weight: 600; }
+.opp-data-text { font-size: 12px; color: var(--text-2); line-height: 1.5; }
+
+.opp-tags { display: flex; flex-wrap: wrap; gap: 5px; }
+
+.opp-score-row { display: flex; align-items: center; gap: 10px; }
+.opp-score-lbl { font-size: 11px; color: var(--text-3); white-space: nowrap; }
+.opp-score-val { font-size: 12px; font-weight: 600; color: var(--accent); white-space: nowrap; }
+.opp-score-bar { flex: 1; height: 4px; background: var(--border); border-radius: 2px; }
+.opp-score-fill { height: 100%; background: var(--accent); border-radius: 2px; transition: width 0.5s ease; }

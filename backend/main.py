@@ -32,6 +32,7 @@ from agents import poll_consensus
 from agents import industry_benchmark
 from agents import prioritisation_roi
 from agents import deck_builder
+from agents import opportunity_generation
 from seed_context import seed_session, build_system_prompt, get_department_names, BUSINESS_CONTEXT
 
 app = FastAPI(title="AI Consulting Copilot", version="2.0.0")
@@ -114,6 +115,9 @@ class ProblemItem(BaseModel):
 class Phase3Request(BaseModel):
     session_code: str;  participant_id: Optional[str] = None
     problems: List[ProblemItem]
+
+class Phase4Request(BaseModel):
+    session_code: str
 
 class DatasetScore(BaseModel):
     dataset: str;  label: str;  scores: dict;  readiness: float
@@ -370,6 +374,37 @@ async def submit_problems(req: Phase3Request):
 
     await broadcast(code, {"type": "problem_clusters", "data": clusters})
     return {"clusters": clusters, "sector_validated_themes": validated, "all_problems": all_problems}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 4 — Opportunity Generation  [Agent 2 + web grounding + self-verify]
+# ─────────────────────────────────────────────────────────────────────────────
+@app.post("/phase/opportunities")
+async def generate_opportunities(req: Phase4Request):
+    code = req.session_code.upper()
+    if code not in sessions:
+        raise HTTPException(404, "Session not found")
+    s = sessions[code]
+
+    # Attach phase_data to session for opportunity agent to read
+    s["phase_data"] = phase_data.get(code, {})
+
+    result = opportunity_generation.generate_use_cases(s)
+    use_cases = result["use_cases"]
+
+    # Persist into workshop_data
+    s["workshop_data"]["use_cases"]            = use_cases
+    s["workshop_data"]["verification_summary"] = result["verification_summary"]
+    s["workshop_data"]["search_evidence"]      = result["search_evidence"]
+    s["workshop_data"]["generation_metadata"]  = result["generation_metadata"]
+
+    await broadcast(code, {
+        "type": "use_cases_ready",
+        "count": len(use_cases),
+        "metadata": result["generation_metadata"],
+    })
+
+    return result
 
 
 # ─────────────────────────────────────────────────────────────────────────────
