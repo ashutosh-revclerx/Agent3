@@ -155,6 +155,9 @@ class VoteRequest(BaseModel):
     session_code: str;  participant_id: Optional[str] = None
     poll_number: int;   voted_ids: List[str]
 
+class BenchmarkRequest(BaseModel):
+    session_code: str
+
 class RevealRequest(BaseModel):
     session_code: str;  phase: str
 
@@ -570,6 +573,12 @@ async def submit_vote(req: VoteRequest):
     results  = poll_consensus.tally_votes(all_votes, use_cases)
     consensus = poll_consensus.detect_consensus(results)
 
+    # Generate GenAI summary of the voting pattern
+    insight = None
+    if len(all_votes) >= 1:
+        insight = poll_consensus.generate_consensus_insight(s["company"], results)
+        consensus["ai_insight"] = insight
+
     # On Poll 2, compute vote shift
     shift = None
     if req.poll_number == 2:
@@ -579,7 +588,7 @@ async def submit_vote(req: VoteRequest):
         s["workshop_data"]["vote_shift"]    = shift
     else:
         s["workshop_data"]["poll1_results"] = results
-
+        s["workshop_data"]["poll1_consensus"] = consensus
     await broadcast(code, {"type": f"poll_{req.poll_number}_update", "results": results, "consensus": consensus})
     return {"results": results, "consensus": consensus, "shift": shift}
 
@@ -587,18 +596,57 @@ async def submit_vote(req: VoteRequest):
 # ─────────────────────────────────────────────────────────────────────────────
 # Phase 6 — Industry Benchmark  [Agent 5: Industry Benchmark]
 # ─────────────────────────────────────────────────────────────────────────────
-@app.get("/phase/benchmark/{session_code}")
-async def get_benchmark(session_code: str):
+def build_benchmark_payload(session_code: str):
     code = session_code.upper()
     if code not in sessions: raise HTTPException(404, "Session not found")
     s = sessions[code]
 
-    org_use_cases = [uc.get("title", "") for uc in s["workshop_data"].get("use_cases", [])]
-    enriched      = industry_benchmark.enrich_with_gemini(s["industry"], s["company"], org_use_cases)
-    s["workshop_data"]["benchmark"] = enriched
+    raw_use_cases = s["workshop_data"].get("use_cases", [])
+    org_use_cases = [uc.get("title", "") for uc in raw_use_cases]
+    enriched = industry_benchmark.enrich_with_gemini(s["industry"], s["company"], org_use_cases)
+    validated_use_cases = industry_benchmark.cross_reference_org_use_cases(raw_use_cases, s["industry"])
 
-    await broadcast(code, {"type": "benchmark_ready", "data": enriched})
-    return enriched
+    payload = {
+        **enriched,
+        "adoption_rate": int(str(enriched.get("adoption_rate", "0")).replace("%", "").strip() or 0),
+        "top_use_cases": [
+            {
+                **uc,
+                "description": uc.get("description") or f"ROI: {uc.get('roi', 'Unknown')} • Complexity: {uc.get('complexity', 'Unknown')}",
+                "industry_adoption_pct": int(str(uc.get("adoption", "0")).replace("%", "").strip() or 0),
+                "avg_roi": uc.get("roi"),
+            }
+            for uc in enriched.get("top_use_cases", [])
+        ],
+        "validated_use_cases": [
+            {
+                **uc,
+                "industry_adoption_pct": int(str(uc.get("industry_adoption", "0")).replace("%", "").strip() or 0)
+                if uc.get("industry_adoption") else 0,
+            }
+            for uc in validated_use_cases
+        ],
+    }
+    s["workshop_data"]["benchmark"] = payload
+    return code, payload
+
+
+@app.get("/phase/benchmark/{session_code}")
+async def get_benchmark(session_code: str):
+    code, payload = build_benchmark_payload(session_code)
+
+    await broadcast(code, {"type": "benchmark_ready", "data": payload})
+    await broadcast(code, {"type": "benchmark_reveal", "data": payload})
+    return payload
+
+
+@app.post("/phase/benchmark")
+async def post_benchmark(req: BenchmarkRequest):
+    code, payload = build_benchmark_payload(req.session_code)
+
+    await broadcast(code, {"type": "benchmark_ready", "data": payload})
+    await broadcast(code, {"type": "benchmark_reveal", "data": payload})
+    return payload
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -430,21 +430,21 @@ def _rank_and_filter(verified: list, ctx: dict) -> list:
     # Sort by composite score descending
     ranked = sorted(verified, key=lambda x: x.get("composite_score", 0), reverse=True)
 
-    # Ensure diversity — at most 3 from same pillar
+    # Ensure diversity — at most 4 from same pillar (relaxed from 3)
     from collections import defaultdict
     pillar_count = defaultdict(int)
     final = []
     for uc in ranked:
         pillar = uc.get("pillar", "Cross-functional")
-        if pillar_count[pillar] < 3:
+        if pillar_count[pillar] < 4:
             final.append(uc)
             pillar_count[pillar] += 1
-        if len(final) >= 8:
+        if len(final) >= 10: # Increased from 8
             break
 
-    # Minimum 4
-    if len(final) < 4 and ranked:
-        final = ranked[:4]
+    # Minimum 6 (increased from 4)
+    if len(final) < 6 and ranked:
+        final = ranked[:6]
 
     return final
 

@@ -6,6 +6,8 @@ import Phase1_Onboarding from './components/Phase1_Onboarding';
 import Phase2_Context from './components/Phase2_Context';
 import Phase3_Problems from './components/Phase3_Problems';
 import Phase4_Opportunities from './components/Phase4_opportunities';
+import Phase5_Poll1 from './components/Phase5_Poll1';
+import Phase6_GlobalAdoptionInsight from './components/Phase6_GlobalAdoptionInsight';
 import ActivityA_DataAudit from './components/ActivityA_DataAudit';
 import ActivityB_Confidence from './components/ActivityB_Confidence';
 import ActivityC_PromptEngineering from './components/ActivityC_PromptEngineering';
@@ -37,6 +39,7 @@ const getWsBase = () => API_BASE.replace(/^http/, 'ws');
 const PHASES = {
   HOME: 'HOME', SETUP: 'SETUP', ONBOARDING: 'ONBOARDING',
   CONTEXT: 'CONTEXT', PROBLEMS: 'PROBLEMS', OPPORTUNITIES: 'OPPORTUNITIES',
+  POLL_1: 'POLL_1', BENCHMARK: 'BENCHMARK',
   ACTIVITY_A: 'ACTIVITY_A', ACTIVITY_B: 'ACTIVITY_B', ACTIVITY_C: 'ACTIVITY_C',
 };
 
@@ -129,7 +132,53 @@ function App() {
 
       case PHASES.OPPORTUNITIES:
         return <Phase4_Opportunities {...shared}
-          onComplete={() => setPhase(PHASES.HOME)}
+          onComplete={(data) => {
+            if (data?.use_cases?.length) {
+              setSession((prev) => ({
+                ...(prev || {}),
+                workshop_data: {
+                  ...(prev?.workshop_data || {}),
+                  use_cases: data.use_cases,
+                  verification_summary: data.verification_summary,
+                  generation_metadata: data.generation_metadata,
+                  search_evidence: data.search_evidence,
+                },
+              }));
+            }
+            setPhase(PHASES.POLL_1);
+          }}
+        />;
+
+      case PHASES.POLL_1:
+        return <Phase5_Poll1 {...shared}
+          onComplete={(data) => {
+            if (data?.results) {
+              setSession((prev) => ({
+                ...(prev || {}),
+                workshop_data: {
+                  ...(prev?.workshop_data || {}),
+                  poll1_results: data.results,
+                },
+              }));
+            }
+            setPhase(PHASES.BENCHMARK);
+          }}
+        />;
+
+      case PHASES.BENCHMARK:
+        return <Phase6_GlobalAdoptionInsight {...shared}
+          onComplete={(data) => {
+            if (data) {
+              setSession((prev) => ({
+                ...(prev || {}),
+                workshop_data: {
+                  ...(prev?.workshop_data || {}),
+                  benchmark: data,
+                },
+              }));
+            }
+            setPhase(PHASES.HOME);
+          }}
         />;
 
       default:

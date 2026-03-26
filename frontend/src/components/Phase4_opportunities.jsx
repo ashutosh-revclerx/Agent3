@@ -21,7 +21,7 @@ export default function Phase4_Opportunities({ api, getWsBase, session, particip
   const [selected,    setSelected]    = useState(null)        // selected use case for detail
   const [error,       setError]       = useState(null)
   const [liveCount,   setLiveCount]   = useState(0)
-  const [filter,      setFilter]      = useState('All')       // All | Quick Win | High Impact | Data Ready
+  const [filter,      setFilter]      = useState('All')       // All | Quick Win | High Impact | Data Ready | <Tag>
   const wsRef = useRef(null)
 
   // ── WebSocket ───────────────────────────────────────────────────────────
@@ -62,10 +62,13 @@ export default function Phase4_Opportunities({ api, getWsBase, session, particip
 
   // ── Filtered use cases ──────────────────────────────────────────────────
   const useCases = result?.use_cases || []
+  const allTags  = [...new Set(useCases.flatMap(uc => uc.tags || []))].sort()
+
   const filtered = useCases.filter(uc => {
     if (filter === 'Quick Win')    return uc.quick_win
     if (filter === 'High Impact')  return uc.impact === 'High'
     if (filter === 'Data Ready')   return uc.data_ready
+    if (allTags.includes(filter))  return uc.tags?.includes(filter)
     return true
   })
 
@@ -154,20 +157,22 @@ export default function Phase4_Opportunities({ api, getWsBase, session, particip
           </div>
 
           {/* Filter bar */}
-          <div className="opp-filter-bar">
-            {['All', 'Quick Win', 'High Impact', 'Data Ready'].map(f => (
+          <div className="opp-filter-bar" style={{ flexWrap: 'wrap', gap: '6px' }}>
+            {['All', 'Quick Win', 'High Impact', 'Data Ready', ...allTags].map(f => (
               <button
                 key={f}
                 className={`opp-filter-btn ${filter === f ? 'active' : ''}`}
                 onClick={() => setFilter(f)}
                 type="button"
+                style={{ marginBottom: 4 }}
               >
                 {f}
                 <span className="opp-filter-count">
                   {f === 'All'         ? useCases.length
                   : f === 'Quick Win'  ? useCases.filter(u => u.quick_win).length
                   : f === 'High Impact'? useCases.filter(u => u.impact === 'High').length
-                  :                     useCases.filter(u => u.data_ready).length}
+                  : f === 'Data Ready' ? useCases.filter(u => u.data_ready).length
+                  :                     useCases.filter(u => u.tags?.includes(f)).length}
                 </span>
               </button>
             ))}
@@ -276,7 +281,7 @@ export default function Phase4_Opportunities({ api, getWsBase, session, particip
             <button className="btn btn-ghost" onClick={generateOpportunities} type="button">
               ↺ Regenerate
             </button>
-            <button className="btn btn-primary" onClick={onComplete} type="button">
+            <button className="btn btn-primary" onClick={() => onComplete?.(result)} type="button">
               Proceed to Voting →
             </button>
           </div>

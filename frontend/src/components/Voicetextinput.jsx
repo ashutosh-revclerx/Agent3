@@ -58,12 +58,18 @@ export default function VoiceTextInput({
     onChangeRef.current = onChange
   }, [value, onChange])
 
+  const lastPlayedRef = useRef('')
+
   // ── Play AI question via ElevenLabs on mount ─────────────────────────────
   useEffect(() => {
     if (!aiQuestion || !apiBase) return
+    // Prevent double-playing if component re-renders or mounts twice in StrictMode
+    if (lastPlayedRef.current === aiQuestion) return
+    
+    lastPlayedRef.current = aiQuestion
     playAIQuestion(aiQuestion)
     return () => stopAudio()
-  }, [aiQuestion])
+  }, [aiQuestion, apiBase])
 
   const playAIQuestion = async (text) => {
     if (!text) return
