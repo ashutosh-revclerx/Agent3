@@ -597,35 +597,51 @@ async def submit_vote(req: VoteRequest):
 # Phase 6 — Industry Benchmark  [Agent 5: Industry Benchmark]
 # ─────────────────────────────────────────────────────────────────────────────
 def build_benchmark_payload(session_code: str):
+    """
+    Calls industry_benchmark.enrich_with_gemini (Tavily + Gemini web grounding)
+    and normalises the result for the frontend.
+    New agent already returns industry_adoption_pct and avg_roi directly.
+    """
     code = session_code.upper()
     if code not in sessions: raise HTTPException(404, "Session not found")
     s = sessions[code]
 
-    raw_use_cases = s["workshop_data"].get("use_cases", [])
-    org_use_cases = [uc.get("title", "") for uc in raw_use_cases]
-    enriched = industry_benchmark.enrich_with_gemini(s["industry"], s["company"], org_use_cases)
+    # Return cached result if already generated this session
+    if s["workshop_data"].get("benchmark"):
+        return code, s["workshop_data"]["benchmark"]
+
+    raw_use_cases       = s["workshop_data"].get("use_cases", [])
+    org_use_cases       = [uc.get("title", "") for uc in raw_use_cases]
+
+    # Agent 5: Tavily search → Gemini web grounding → static fallback
+    enriched            = industry_benchmark.enrich_with_gemini(s["industry"], s["company"], org_use_cases)
     validated_use_cases = industry_benchmark.cross_reference_org_use_cases(raw_use_cases, s["industry"])
+
+    # Normalise adoption_rate to int (new agent already does this, belt+braces)
+    try:
+        adoption_rate = int(str(enriched.get("adoption_rate", 0)).replace("%", "").strip())
+    except (ValueError, TypeError):
+        adoption_rate = 0
+
+    # Normalise top_use_cases — new agent returns industry_adoption_pct + avg_roi directly
+    top_use_cases = []
+    for uc in enriched.get("top_use_cases", []):
+        try:
+            pct = int(str(uc.get("industry_adoption_pct", uc.get("adoption", 0))).replace("%", "").strip())
+        except (ValueError, TypeError):
+            pct = 0
+        top_use_cases.append({
+            **uc,
+            "industry_adoption_pct": pct,
+            "avg_roi":   uc.get("avg_roi") or uc.get("roi"),
+            "description": uc.get("description") or f"Complexity: {uc.get('complexity', 'Unknown')}",
+        })
 
     payload = {
         **enriched,
-        "adoption_rate": int(str(enriched.get("adoption_rate", "0")).replace("%", "").strip() or 0),
-        "top_use_cases": [
-            {
-                **uc,
-                "description": uc.get("description") or f"ROI: {uc.get('roi', 'Unknown')} • Complexity: {uc.get('complexity', 'Unknown')}",
-                "industry_adoption_pct": int(str(uc.get("adoption", "0")).replace("%", "").strip() or 0),
-                "avg_roi": uc.get("roi"),
-            }
-            for uc in enriched.get("top_use_cases", [])
-        ],
-        "validated_use_cases": [
-            {
-                **uc,
-                "industry_adoption_pct": int(str(uc.get("industry_adoption", "0")).replace("%", "").strip() or 0)
-                if uc.get("industry_adoption") else 0,
-            }
-            for uc in validated_use_cases
-        ],
+        "adoption_rate":       adoption_rate,
+        "top_use_cases":       top_use_cases,
+        "validated_use_cases": validated_use_cases,
     }
     s["workshop_data"]["benchmark"] = payload
     return code, payload
