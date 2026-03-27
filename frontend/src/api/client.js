@@ -31,7 +31,7 @@ const client = {
   },
 
   getSession: async (code) => {
-    const res = await fetch(`${API_URL}/session/${code.toUpperCase()}`, { headers });
+    const res = await fetch(`${API_URL}/session/${code.trim().toUpperCase()}`, { headers });
     if (!res.ok) throw new Error('Session not found');
     return res.json();
   },
@@ -42,7 +42,7 @@ const client = {
       method: 'POST',
       headers,
       body: JSON.stringify({
-        session_code: data.sessionCode,
+        session_code: data.sessionCode.trim().toUpperCase(),
         name: data.fullName,
         role: data.role,
         department: data.department,

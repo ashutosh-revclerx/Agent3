@@ -21,6 +21,32 @@ load_dotenv(ENV_PATH)
 _client: genai.Client | None = None
 
 
+def _response_text(response) -> str:
+    """
+    Safely extract text from google-genai responses.
+    Some responses have `text=None` even when content exists in candidates/parts.
+    """
+    text = getattr(response, "text", None)
+    if isinstance(text, str):
+        stripped = text.strip()
+        if stripped:
+            return stripped
+
+    candidates = getattr(response, "candidates", None) or []
+    parts: list[str] = []
+
+    for candidate in candidates:
+        content = getattr(candidate, "content", None)
+        if not content:
+            continue
+        for part in getattr(content, "parts", None) or []:
+            part_text = getattr(part, "text", None)
+            if isinstance(part_text, str) and part_text.strip():
+                parts.append(part_text.strip())
+
+    return "\n".join(parts).strip()
+
+
 def _strip_code_fences(text: str) -> str:
     text = text.strip()
     text = re.sub(r"^```(?:json)?\s*", "", text)
@@ -181,7 +207,7 @@ def gemini_json(prompt: str, model: str = DEFAULT_MODEL) -> dict | list | None:
                 response_mime_type="application/json",
             ),
         )
-        text = response.text or ""
+        text = _response_text(response)
         return _parse_json_response(text)
     except Exception as e:
         print(f"gemini_json error: {e}")
@@ -210,7 +236,8 @@ def gemini_text(prompt: str, system: str = "",
                 max_output_tokens=1024,
             ),
         )
-        return response.text.strip()
+        text = _response_text(response)
+        return text or None
     except Exception as e:
         print(f"gemini_text error: {e}")
         return None
@@ -242,7 +269,7 @@ def gemini_json_with_system(prompt: str, system: str,
                 response_mime_type="application/json",
             ),
         )
-        text = response.text or ""
+        text = _response_text(response)
         return _parse_json_response(text)
     except Exception as e:
         print(f"gemini_json_with_system error: {e}")

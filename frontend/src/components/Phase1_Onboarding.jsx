@@ -48,8 +48,10 @@ export default function Phase1_Onboarding({ api, apiBase, session, role, onCompl
     setLoading(true)
     setError(null)
     try {
-      const data = await api(`/session/${sessionCode.toUpperCase()}`)
+      const normalizedCode = sessionCode.trim().toUpperCase()
+      const data = await api(`/session/${normalizedCode}`)
       setResolvedSession(data)
+      setSessionCode(normalizedCode)
       setStep('profile')
     } catch {
       setError('Session not found. Check your code and try again.')
@@ -68,7 +70,7 @@ export default function Phase1_Onboarding({ api, apiBase, session, role, onCompl
       const data = await api('/participant/join', {
         method: 'POST',
         body: JSON.stringify({
-          session_code: resolvedSession?.code || sessionCode,
+          session_code: (resolvedSession?.code || sessionCode).trim().toUpperCase(),
           name,
           role: selectedRole,
           department,

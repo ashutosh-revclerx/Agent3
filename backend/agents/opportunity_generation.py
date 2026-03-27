@@ -1,7 +1,7 @@
 """
 agents/opportunity_generation.py
 ──────────────────────────────────
-OPPORTUNITY GENERATION AGENT  (Phase 4)
+OPPORTUNITY GENwebERATION AGENT  (Phase 4)
 ────────────────────────────────────────
 Responsibility:
   - Synthesises Phase 2 objectives, Phase 3 problem clusters,
@@ -13,7 +13,7 @@ Responsibility:
 Pipeline:
   1. gather_context()      — pull all upstream workshop data
   2. generate_candidates() — Gemini generates 8-12 raw use cases
-  3. web_search_enrich()   — ground each in real-world evidence
+  3. _search_enrich()   — ground each in real-world evidence
   4. self_verify()         — Gemini checks each use case for quality
   5. rank_and_filter()     — score, deduplicate, return top 6-8
 """

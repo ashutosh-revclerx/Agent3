@@ -217,14 +217,14 @@ def create_session(req: CreateSessionRequest):
 
 @app.get("/session/{code}")
 def get_session(code: str):
-    code = code.upper()
+    code = code.strip().upper()
     if code not in sessions:
         raise HTTPException(404, f"Session '{code}' not found in memory. It may have been lost during a server reload.")
     return sessions[code]
 
 @app.get("/session/{code}/participants")
 def get_participants(code: str):
-    code = code.upper()
+    code = code.strip().upper()
     if code not in sessions:
         raise HTTPException(404, "Session not found")
     s = sessions[code]
@@ -282,7 +282,7 @@ def summarise_onboarding_conversation(conversation: list, name: str, role: str, 
 # ─────────────────────────────────────────────────────────────────────────────
 @app.post("/participant/join")
 async def join_participant(req: JoinRequest):
-    code = req.session_code.upper()
+    code = req.session_code.strip().upper()
     if code not in sessions:
         raise HTTPException(404, f"Session '{code}' not found in memory (re-join may be required).")
     p = {
