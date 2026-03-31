@@ -356,6 +356,10 @@ export default function Phase2_Context({ api, apiBase, getWsBase, session, parti
     challenges.trim().length > 20
 
   const handleSubmit = async () => {
+    if (!session?.code) {
+      setError('Session context is missing. Rejoin the workshop and try again.')
+      return
+    }
     setSubmitting(true)
     setError(null)
     try {
@@ -375,8 +379,8 @@ export default function Phase2_Context({ api, apiBase, getWsBase, session, parti
       })
       setInsights(result.objective_map)
       setStep('insights')
-    } catch {
-      setError('Could not submit. Is the backend running?')
+    } catch (err) {
+      setError(err.message || 'Could not submit. Is the backend running?')
     } finally {
       setSubmitting(false)
     }
@@ -550,8 +554,8 @@ export default function Phase2_Context({ api, apiBase, getWsBase, session, parti
           <div className="fade-up">
             <div className="phase-title-block">
               <p className="badge badge-accent">Step 3 of 3</p>
-              <h2 className="phase-title">One question<br />from the AI</h2>
-              <p className="phase-desc">The agent will ask you a tailored question based on your {role} role. Answer in your own words.</p>
+              <h2 className="phase-title">Challenges that you face</h2>
+              {/* <p className="phase-desc">The agent will ask you a tailored question based on your {role} role. Answer in your own words.</p> */}
             </div>
 
             <div className="phase-form">

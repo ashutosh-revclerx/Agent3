@@ -199,9 +199,9 @@ def enrich_with_gemini(industry: str, company: str, org_use_cases: list) -> dict
 
     # Step 1 — Tavily live web search
     tavily_context = _tavily_search([
-        f"AI adoption statistics {industry} 2024 2025",
+        f"AI adoption statistics {industry}  2025 2026",
         f"top AI use cases {industry} companies deploying now",
-        f"AI ROI return on investment {industry} industry 2024 report",
+        f"AI ROI return on investment {industry} industry 2025  report",
     ])
 
     web_section = (

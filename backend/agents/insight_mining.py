@@ -16,6 +16,7 @@ from gemini_client import gemini_json
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from seed_context import build_system_prompt, get_all_pain_points
+from .industry_benchmark import get_industry_benchmarks
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -268,21 +269,29 @@ def detect_sector_overlap(industry: str, problem_themes: list) -> list:
     Returns which problem themes are commonly seen across the industry.
     Used to add 'sector-validated' signals to use case cards in Phase 4.
     """
-    # TODO: connect to industry benchmark database in Phase 6
-    # For now, return a simple signal map
-    COMMON_BY_INDUSTRY = {
-        "Technology & Software":         ["manual reporting", "lead qualification", "support tickets"],
-        "Financial Services & Banking":  ["document processing", "compliance checks", "customer onboarding"],
-        "Healthcare & Life Sciences":    ["patient data entry", "appointment scheduling", "billing"],
-        "Retail & E-commerce":           ["inventory management", "customer support", "demand forecasting"],
-        "Manufacturing & Supply Chain":  ["quality control", "predictive maintenance", "inventory"],
-        "Professional Services":         ["time tracking", "proposal generation", "client reporting"],
-    }
-    common = COMMON_BY_INDUSTRY.get(industry, [])
+    benchmarks = get_industry_benchmarks(industry)
+    benchmark_terms = []
+    for use_case in benchmarks.get("top_use_cases", []):
+        title = use_case.get("title", "").strip().lower()
+        description = use_case.get("description", "").strip().lower()
+        if title:
+            benchmark_terms.append(title)
+        if description:
+            benchmark_terms.extend(
+                word for word in description.replace("&", " ").replace("/", " ").replace("-", " ").split()
+                if len(word) > 4
+            )
+
     validated = []
     for theme in problem_themes:
-        for c in common:
-            if c.lower() in theme.lower():
+        theme_lower = (theme or "").lower()
+        theme_words = {
+            word for word in theme_lower.replace("&", " ").replace("/", " ").replace("-", " ").split()
+            if len(word) > 3
+        }
+        for term in benchmark_terms:
+            term_words = set(term.split())
+            if term in theme_lower or len(theme_words.intersection(term_words)) >= 2:
                 validated.append(theme)
                 break
     return validated

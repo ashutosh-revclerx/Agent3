@@ -67,10 +67,13 @@ export default function Phase1_Onboarding({ api, apiBase, session, role, onCompl
     setLoading(true)
     setError(null)
     try {
+      const activeSession = resolvedSession || session || {
+        code: (resolvedSession?.code || sessionCode).trim().toUpperCase(),
+      }
       const data = await api('/participant/join', {
         method: 'POST',
         body: JSON.stringify({
-          session_code: (resolvedSession?.code || sessionCode).trim().toUpperCase(),
+          session_code: activeSession.code,
           name,
           role: selectedRole,
           department,
@@ -80,7 +83,10 @@ export default function Phase1_Onboarding({ api, apiBase, session, role, onCompl
           conversation: conversation.map(m => ({ role: m.type === 'user' ? 'user' : 'agent', text: m.text })),
         }),
       })
-      onComplete(data)
+      onComplete({
+        participant: data,
+        session: activeSession,
+      })
     } catch (err) {
       setError(err.message || 'Could not join session. Please try again.')
     } finally {

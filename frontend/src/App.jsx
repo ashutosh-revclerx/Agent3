@@ -8,6 +8,7 @@ import Phase3_Problems from './components/Phase3_Problems';
 import Phase4_Opportunities from './components/Phase4_opportunities';
 import Phase5_Poll1 from './components/Phase5_Poll1';
 import Phase6_GlobalAdoptionInsight from './components/Phase6_GlobalAdoptionInsight';
+import Phase7_Poll2 from './components/Phase7_poll2';
 import ActivityA_DataAudit from './components/ActivityA_DataAudit';
 import ActivityB_Confidence from './components/ActivityB_Confidence';
 import ActivityC_PromptEngineering from './components/ActivityC_PromptEngineering';
@@ -39,7 +40,7 @@ const getWsBase = () => API_BASE.replace(/^http/, 'ws');
 const PHASES = {
   HOME: 'HOME', SETUP: 'SETUP', ONBOARDING: 'ONBOARDING',
   CONTEXT: 'CONTEXT', PROBLEMS: 'PROBLEMS', OPPORTUNITIES: 'OPPORTUNITIES',
-  POLL_1: 'POLL_1', BENCHMARK: 'BENCHMARK',
+  POLL_1: 'POLL_1', BENCHMARK: 'BENCHMARK', POLL_2: 'POLL_2',
   ACTIVITY_A: 'ACTIVITY_A', ACTIVITY_B: 'ACTIVITY_B', ACTIVITY_C: 'ACTIVITY_C',
 };
 
@@ -174,6 +175,23 @@ function App() {
                 workshop_data: {
                   ...(prev?.workshop_data || {}),
                   benchmark: data,
+                },
+              }));
+            }
+            setPhase(PHASES.POLL_2);
+          }}
+        />;
+
+      case PHASES.POLL_2:
+        return <Phase7_Poll2 {...shared}
+          onComplete={(data) => {
+            if (data?.results || data?.shift) {
+              setSession((prev) => ({
+                ...(prev || {}),
+                workshop_data: {
+                  ...(prev?.workshop_data || {}),
+                  ...(data?.results ? { poll2_results: data.results } : {}),
+                  ...(data?.shift ? { vote_shift: data.shift } : {}),
                 },
               }));
             }
