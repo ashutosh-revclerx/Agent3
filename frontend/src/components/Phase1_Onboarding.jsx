@@ -5,7 +5,7 @@ import './phases.css'
 const ROLES = [
   'CEO / Founder', 'CTO / Technology Leader', 'COO / Operations',
   'Product Manager', 'Data / AI Engineer', 'Business Analyst',
-  'Department Head', 'Consultant', 'Other',
+  'Department Head', 'Consultant', 'Lead Generation', 'Other',
 ]
 
 const CHALLENGE_QUESTION = {
@@ -17,12 +17,14 @@ const CHALLENGE_QUESTION = {
   'Business Analyst': 'Which reporting or analysis task takes the most manual effort and produces the least reliable output?',
   'Department Head': 'What keeps your team from performing at its best day to day?',
   'Consultant': 'What is the most common reason client AI initiatives fail to reach production, in your experience?',
+  'Lead Generation': 'What is the biggest obstacle preventing your lead generation efforts from converting into qualified sales opportunities?',
   'Other': 'What is the biggest operational challenge in your day-to-day work right now?',
 }
 
 const CHALLENGE_HINT = {
   'CTO / Technology Leader': 'Think about legacy systems, data pipelines, deployment speed, or team capability gaps.',
   'Data / AI Engineer': 'Think about data quality, model reliability, tooling gaps, or deployment friction.',
+  'Lead Generation': 'Think about lead quality, manual data entry, follow-up speed, or channel attribution.',
   'Business Analyst': 'Think about data gathering, spreadsheet wrangling, or insight-to-decision delays.',
   default: 'Be specific - the more detail you give, the more precisely the AI can identify relevant use cases.',
 }
@@ -131,6 +133,8 @@ export default function Phase1_Onboarding({ api, apiBase, session, role, onCompl
         `From what you've shared about your day-to-day${toolPhrase}, what keeps your team from performing at their best consistently?`,
       'Consultant':
         `Given the workflow you've described${toolPhrase}, what's the most common reason AI initiatives fail to reach production in your experience?`,
+      'Lead Generation':
+        `Based on the lead generation workflow you've outlined${toolPhrase}, which stage of the funnel — capture, enrichment, qualification, or hand-off — suffers from the most friction?`,
       'Other':
         `Based on what you've described${toolPhrase}, what's the biggest operational challenge you face day to day?`,
     }
@@ -297,7 +301,7 @@ export default function Phase1_Onboarding({ api, apiBase, session, role, onCompl
           </div>
 
           <div className="phase-footer">
-            <button className="btn btn-ghost" onClick={onBack}>â† Back</button>
+            <button className="btn btn-ghost" onClick={onBack}>← Back</button>
             <button className="btn btn-primary" onClick={handleJoin} disabled={!isFormValid || loading}>
               {loading ? <><span className="spinner" /> Joining...</> : 'Enter Workshop →'}
             </button>

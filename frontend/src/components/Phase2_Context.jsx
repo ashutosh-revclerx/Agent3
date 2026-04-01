@@ -232,6 +232,34 @@ const ROLE_CONFIG = {
     ],
   },
 
+  'Lead Generation': {
+    objectiveTitle: 'What are your lead generation priorities?',
+    objectiveDesc:  'Select the outcomes most critical to your pipeline growth.',
+    growthTitle:    'Where are you investing in your lead funnel?',
+    challengePrompt:'What is the biggest obstacle preventing your lead generation efforts from converting into qualified sales opportunities?',
+    challengeHint:  'Think about lead quality, manual data entry, follow-up speed, or channel attribution.',
+    objectives: [
+      { id: 'volume',     icon: '◆', label: 'Lead Volume',               desc: 'Increase MQLs/SQLs' },
+      { id: 'quality',    icon: '◈', label: 'Lead Quality & Scoring',    desc: 'Better qualification, less noise' },
+      { id: 'conversion', icon: '⬢', label: 'Conversion Rates',          desc: 'Optimise funnel stages' },
+      { id: 'attribution',icon: '▣', label: 'Channel Attribution',       desc: 'Understand what works' },
+      { id: 'outreach',   icon: '◉', label: 'Automated Outreach',        desc: 'Scaled personalized contact' },
+      { id: 'enrich',     icon: '◇', label: 'Data Enrichment',           desc: 'Better lead data/insights' },
+      { id: 'crm',        icon: '⬡', label: 'CRM Sync',                  desc: 'Clean, real-time data flows' },
+      { id: 'alignment',  icon: '◎', label: 'Sales/Marketing Alignment', desc: 'Smoother hand-offs' },
+    ],
+    growthOptions: [
+      'Scaling outbound volume without proportional headcount',
+      'Implementing AI-driven lead scoring and prioritisation',
+      'Automating personalised follow-up at scale',
+      'Improving data enrichment for better targeting',
+      'Reducing lead response time (speed to lead)',
+      'Expanding into new digital acquisition channels',
+      'Improving attribution accuracy across the journey',
+      'Optimising landing page conversion via AI',
+    ],
+  },
+
   'Other': {
     objectiveTitle: 'What are your top strategic priorities?',
     objectiveDesc:  'Select all that apply to your work this year.',

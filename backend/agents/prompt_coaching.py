@@ -81,6 +81,13 @@ ROLE_SCENARIOS = {
         "data_available": ["Client annual report (PDF)", "Org chart", "List of 5 strategic priorities"],
         "expected_output": "A 1-page AI opportunity brief: top 3 use cases with impact/complexity ratings, one recommended quick win with rationale, and 3 discovery questions to validate the assessment.",
     },
+    "Lead Generation": {
+        "title": "Lead enrichment and prioritisation — outbound campaign",
+        "situation": "You have just received a list of 500 new leads from a recent webinar. You have their names and companies, but no data on their role, company size, or recent funding. Your SDR team needs a prioritised list by tomorrow morning to start their outreach, but manual research would take 3 days.",
+        "task": "Write a prompt that instructs an AI to take the list of 500 leads, enrich them with public data, score them based on 'Ideal Customer Profile' (ICP) fit, and produce a prioritised CSV export for the SDR team.",
+        "data_available": ["Webinar attendee list (Names/Companies)", "Internal ICP criteria document", "Salesforce historical conversion data"],
+        "expected_output": "A prioritised lead list: top 50 'Tier 1' leads with enrichment notes, ICP fit score (1-10) for all leads, and a 3-sentence summary of the highest-potential segments.",
+    },
     "Other": {
         "title": "Weekly status update — manual reporting task",
         "situation": "Every Friday afternoon you spend 90 minutes compiling the weekly status report. You pull numbers from 4 different systems, copy them into a spreadsheet, write a summary paragraph, and email it to 12 stakeholders. This week you have a client call that runs until 5pm but the report is due at 5:30pm.",
@@ -258,6 +265,7 @@ def run_simulation(improved_prompt: str, task_context: str,
         "Business Analyst":        "Saves ~2 hours of reconciliation work, delivered in under 2 minutes",
         "Department Head":         "Saves ~2.5 hours of prep — 8 structured notes instead of blank page",
         "Consultant":              "Saves ~3 hours of research — credible first-pass assessment in minutes",
+        "Lead Generation":         "Saves ~3 days of manual lead research and enrichment work",
     }
 
     scenario_data = ""
