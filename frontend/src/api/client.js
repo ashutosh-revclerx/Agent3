@@ -23,7 +23,9 @@ const client = {
         company: data.company,
         industry: data.industry,
         participant_count: data.participants,
-        duration_mins: durationMins
+        duration_mins: durationMins,
+        company_url: data.companyUrl || '',
+        company_linkedin_url: data.companyLinkedinUrl || ''
       })
     });
     if (!res.ok) throw new Error('Failed to create session');

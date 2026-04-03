@@ -12,7 +12,8 @@ function Phase0_Setup({ api, onComplete, onBack }) {
   const [form, setForm] = useState({
     host_name: '', company: '', industry: '',
     participant_count: 10, duration_mins: 90,
-    company_url: '' // Added
+    company_url: '',
+    company_linkedin_url: ''
   });
   const [customIndustry, setCustomIndustry] = useState('');
   const [loading, setLoading] = useState(false);
@@ -33,7 +34,8 @@ function Phase0_Setup({ api, onComplete, onBack }) {
         body: JSON.stringify({
           ...form,
           industry: form.industry === 'Other' ? customIndustry : form.industry,
-          company_url: form.company_url // Explicitly send
+          company_url: form.company_url,
+          company_linkedin_url: form.company_linkedin_url
         })
       });
       onComplete(data);
@@ -81,6 +83,13 @@ function Phase0_Setup({ api, onComplete, onBack }) {
             <input className="input" placeholder="e.g. https://futurecorp.com"
               value={form.company_url}
               onChange={e => setForm({...form, company_url: e.target.value})} />
+          </div>
+
+          <div className="input-group">
+            <label className="input-label">Company LinkedIn Page (Optional)</label>
+            <input className="input" placeholder="e.g. https://www.linkedin.com/company/futurecorp"
+              value={form.company_linkedin_url}
+              onChange={e => setForm({...form, company_linkedin_url: e.target.value})} />
           </div>
 
           <div className="input-group">

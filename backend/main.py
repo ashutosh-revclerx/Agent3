@@ -93,6 +93,7 @@ class CreateSessionRequest(BaseModel):
     host_name: str;  company: str;  industry: str
     participant_count: int;  duration_mins: int = 90
     company_url: Optional[str] = None # Added for website scraping
+    company_linkedin_url: Optional[str] = None
 
 class JoinRequest(BaseModel):
     session_code: str;  name: str;  role: str
@@ -199,6 +200,8 @@ def create_session(req: CreateSessionRequest):
         "host_name": req.host_name, "company": req.company,
         "industry": req.industry, "participant_count": req.participant_count,
         "duration_mins": req.duration_mins, "current_phase": 0,
+        "company_url": req.company_url,
+        "company_linkedin_url": req.company_linkedin_url,
         "participants": [], "status": "waiting",
         "created_at": datetime.datetime.utcnow().isoformat(),
         "revealed_phases": [],   # phases host has revealed to participants
