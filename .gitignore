@@ -1,9 +1,10 @@
 # Dependency directories
 node_modules/
 jspm_packages/
+package-lock.json
 
 # Python
-__pycache__/
+**/__pycache__/
 *.py[cod]
 *$py.class
 .venv
@@ -29,22 +30,38 @@ out/
 .env.test.local
 .env.production.local
 *.env
+backend/.env
+frontend/.env
 
 # Logs
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 *.log
+copilot.log
 
 # Editor/OS specific
 .vscode/
 .idea/
 .DS_Store
+*.swp
 Thumbs.db
 
-# Documentation/Artifacts (if you want to keep them local)
+# Antigravity/Agent specific
+.gemini/
 brain/
 tmp/
+artifacts/
+walkthrough.md
+implementation_plan.md
+task.md
 
-# Local scratch scripts
-do.py
+# Workspace specific scratch
+hello.py
+backend/stored.txt
+backend/output.mp3
+AI Consulting Copilot.pdf
+AI_Consulting_Copilot_Final (1).docx
+Workshop_Workflow_Reference.docx
+plan.md
+tasks.md

@@ -13,6 +13,7 @@ from agents import (
     industry_benchmark,
     prioritisation_roi,
     deck_builder,
+    scraping_agent,
 )
 
 __all__ = [
@@ -23,4 +24,5 @@ __all__ = [
     "industry_benchmark",
     "prioritisation_roi",
     "deck_builder",
+    "scraping_agent",
 ]

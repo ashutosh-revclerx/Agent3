@@ -13,7 +13,7 @@ Multi-Agent Architecture:
   Agent 6 → prioritisation_roi   (Phase 8 impact/effort matrix)
   Agent 7 → deck_builder         (Phase 11 deliverables)
 """
-import uuid, random, string, datetime, json, asyncio, os
+import uuid, random, string, datetime, json, asyncio, os, logging
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -33,9 +33,12 @@ from agents import industry_benchmark
 from agents import prioritisation_roi
 from agents import deck_builder
 from agents import opportunity_generation
+from agents import scraping_agent
 from seed_context import seed_session, build_system_prompt, get_department_names, BUSINESS_CONTEXT
+from schemas import CompanyDNA, ParticipantProfile
 
 app = FastAPI(title="AI Consulting Copilot", version="2.0.0")
+logger = logging.getLogger("copilot.tts")
 
 app.add_middleware(
     CORSMiddleware,
@@ -89,6 +92,7 @@ async def broadcast(code: str, message: dict):
 class CreateSessionRequest(BaseModel):
     host_name: str;  company: str;  industry: str
     participant_count: int;  duration_mins: int = 90
+    company_url: Optional[str] = None # Added for website scraping
 
 class JoinRequest(BaseModel):
     session_code: str;  name: str;  role: str
@@ -96,6 +100,7 @@ class JoinRequest(BaseModel):
     daily_work: str = ""
     conversation: list = []  # full onboarding chat transcript [{role, text}]
     workflow_summary: str = ""  # pre-summarised by client (optional)
+    linkedin_url: Optional[str] = None # Added for LinkedIn scraping
 
 class Phase2Request(BaseModel):
     session_code:     str
@@ -212,7 +217,25 @@ def create_session(req: CreateSessionRequest):
     intro = facilitator.get_phase_intro(0, req.company)
     print(f"✅ Session: {code} | {req.company} | {req.industry}")
     print(f"   Seeded: {len(session['known_departments'])} departments, {len(session['pillar_names'])} pillars")
+
+    # Start background company scraping if URL is provided
+    if req.company_url:
+        asyncio.create_task(background_company_scrape(code, req.company_url))
+
     return {**session, "intro_message": intro}
+
+
+async def background_company_scrape(session_code: str, url: str):
+    """Background task using Scraping Agent."""
+    try:
+        dna_data = await scraping_agent.run_company_scrape(session_code, url)
+        if dna_data:
+            sessions[session_code]["company_dna"] = dna_data
+            # Broadcast the DNA to the host/participants
+            await broadcast(session_code, {"type": "company_dna_ready", "dna": dna_data})
+            logger.info(f"Broadcasting Company DNA for {session_code}")
+    except Exception as e:
+        logger.error(f"Scraping Agent: Company scrape failed for {session_code}: {e}")
 
 
 @app.get("/session/{code}")
@@ -299,7 +322,46 @@ async def join_participant(req: JoinRequest):
     participants[p["id"]] = p
     await broadcast(code, {"type": "participant_joined", "count": len(sessions[code]["participants"]), "name": req.name})
     print(f"👤 {req.name} ({req.role}) → {code}")
+
+    # Start background LinkedIn scraping if URL is provided
+    if req.linkedin_url:
+        asyncio.create_task(background_linkedin_scrape(code, p["id"], req.linkedin_url))
+
     return p
+
+
+async def background_linkedin_scrape(session_code: str, participant_id: str, url: str):
+    """Background task using Scraping Agent."""
+    try:
+        profile_data = await scraping_agent.run_linkedin_scrape(participant_id, url)
+        if profile_data:
+            participants[participant_id]["linkedin_profile"] = profile_data
+            # Broadcast to the participant (or session)
+            await broadcast(session_code, {
+                "type": "participant_profile_ready",
+                "participant_id": participant_id,
+                "profile": profile_data
+            })
+            logger.info(f"Broadcasting Participant Profile for {participant_id}")
+    except Exception as e:
+        logger.error(f"LinkedIn scrape failed: {e}")
+
+@app.post("/session/{code}/dna")
+async def save_company_dna(code: str, dna: CompanyDNA):
+    code = code.upper()
+    if code not in sessions: raise HTTPException(404, "Session not found")
+    sessions[code]["company_dna"] = dna.model_dump()
+    logger.info(f"Host confirmed DNA for {code}")
+    return {"status": "saved"}
+
+@app.post("/participant/{id}/profile")
+async def save_participant_profile(id: str, profile: ParticipantProfile):
+    if id not in participants: raise HTTPException(404, "Participant not found")
+    participants[id]["linkedin_profile"] = profile.model_dump()
+    participants[id]["name"] = profile.name
+    participants[id]["role"] = profile.role
+    logger.info(f"Participant confirmed profile for {id}")
+    return {"status": "saved"}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -815,12 +877,13 @@ async def speak(req: SpeakRequest):
     Proxy text to ElevenLabs TTS and stream MP3 audio back to the frontend.
     Falls back gracefully if ELEVENLABS_API_KEY is not set.
     """
-    from fastapi.responses import StreamingResponse
+    from fastapi.responses import Response
     api_key = os.getenv("ELEVENLABS_API_KEY")
     if not api_key:
-        # Return a tiny silent MP3 so the frontend doesn't break
+        # Surface a clear error so the frontend can skip TTS gracefully.
+        logger.warning("TTS disabled: ELEVENLABS_API_KEY not set")
         raise HTTPException(503, "ELEVENLABS_API_KEY not set — voice disabled")
-
+    # url = "https://subpatronal-yolanda-promonarchy.ngrok-free.dev/v1/third-party/elevenlabs/proxy/v1/text-to-speech/21m00Tcm4TlvDq8ikWAM"
     url = f"https://api.elevenlabs.io/v1/text-to-speech/{req.voice_id}/stream"
     headers = {
         "xi-api-key": api_key,
@@ -836,15 +899,57 @@ async def speak(req: SpeakRequest):
         },
     }
 
-    async def stream_audio():
-        async with httpx.AsyncClient(timeout=20) as client:
-            async with client.stream("POST", url, headers=headers, json=payload) as resp:
-                if resp.status_code != 200:
-                    return
-                async for chunk in resp.aiter_bytes(chunk_size=4096):
-                    yield chunk
+    req_id = uuid.uuid4().hex[:8]
+    logger.info(
+        "TTS request %s: voice_id=%s model_id=%s text_len=%s",
+        req_id,
+        req.voice_id,
+        req.model_id,
+        len(req.text or ""),
+    )
 
-    return StreamingResponse(stream_audio(), media_type="audio/mpeg")
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            resp = await client.post(url, headers=headers, json=payload)
+    except Exception as e:
+        logger.exception("TTS request %s: upstream request failed: %s", req_id, e)
+        raise HTTPException(502, "ElevenLabs TTS request failed") from e
+
+    content_type = resp.headers.get("content-type", "")
+    content_length = resp.headers.get("content-length", "unknown")
+    logger.info(
+        "TTS request %s: upstream status=%s content_type=%s content_length=%s",
+        req_id,
+        resp.status_code,
+        content_type or "unknown",
+        content_length,
+    )
+
+    if resp.status_code != 200:
+        detail = resp.text.strip()
+        logger.warning(
+            "TTS request %s: upstream non-200 detail=%r",
+            req_id,
+            detail[:200],
+        )
+        if len(detail) > 200:
+            detail = detail[:200].rstrip() + "..."
+        raise HTTPException(
+            502,
+            detail or f"ElevenLabs TTS failed with status {resp.status_code}",
+        )
+
+    audio_bytes = resp.content
+    logger.info("TTS request %s: audio_bytes=%s", req_id, len(audio_bytes) if audio_bytes else 0)
+    if not audio_bytes or len(audio_bytes) < 512:
+        logger.warning(
+            "TTS request %s: empty or too-small audio response (bytes=%s)",
+            req_id,
+            len(audio_bytes) if audio_bytes else 0,
+        )
+        raise HTTPException(502, "ElevenLabs TTS returned an empty audio response")
+
+    return Response(content=audio_bytes, media_type="audio/mpeg")
 
 
 @app.post("/ai/clean-transcript")

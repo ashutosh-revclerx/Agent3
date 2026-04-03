@@ -69,11 +69,19 @@ export default function AgentChat({
           body: JSON.stringify({ text: text.slice(0, 500) }),
           signal: controller.signal,
         })
-        if (!res.ok) throw new Error(`speak HTTP ${res.status}`)
+        if (!res.ok) {
+          const detail = (await res.text().catch(() => '')).trim()
+          throw new Error(detail || `speak HTTP ${res.status}`)
+        }
+
+        const contentType = res.headers.get('content-type') || ''
+        if (!contentType.includes('audio/')) {
+          throw new Error(`speak: unexpected content type (${contentType || 'unknown'})`)
+        }
 
         const buffer = await res.arrayBuffer()
         if (controller.signal.aborted) return
-        if (!buffer || buffer.byteLength < 100) throw new Error('speak: response too small')
+        if (!buffer || buffer.byteLength < 512) throw new Error('speak: empty audio response')
 
         const blob = new Blob([buffer], { type: 'audio/mpeg' })
         const url = URL.createObjectURL(blob)
@@ -94,7 +102,9 @@ export default function AgentChat({
         audio.play().catch(() => setIsAgentSpeaking(false))
       } catch (err) {
         if (err.name === 'AbortError') return
-        console.warn('[AgentChat] TTS error:', err.message, retriesLeft > 0 ? '— retrying' : '— skipping')
+        const msg = err?.message || 'Unknown TTS error'
+        const log = retriesLeft > 0 ? console.warn : console.info
+        log('[AgentChat] TTS unavailable:', msg, retriesLeft > 0 ? '-- retrying' : '-- skipping')
         if (retriesLeft > 0) {
           setTimeout(() => attempt(retriesLeft - 1), 1000)
         } else {

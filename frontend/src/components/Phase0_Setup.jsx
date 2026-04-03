@@ -11,12 +11,18 @@ const INDUSTRIES = [
 function Phase0_Setup({ api, onComplete, onBack }) {
   const [form, setForm] = useState({
     host_name: '', company: '', industry: '',
-    participant_count: 10, duration_mins: 90
+    participant_count: 10, duration_mins: 90,
+    company_url: '' // Added
   });
+  const [customIndustry, setCustomIndustry] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  const valid = form.host_name && form.company && form.industry && form.participant_count > 0;
+
+  const valid = form.host_name && 
+                form.company && 
+                (form.industry === 'Other' ? customIndustry.trim() : form.industry) && 
+                form.participant_count > 0;
 
   const handleSubmit = async () => {
     if (!valid) return;
@@ -24,7 +30,11 @@ function Phase0_Setup({ api, onComplete, onBack }) {
     try {
       const data = await api('/session/create', {
         method: 'POST',
-        body: JSON.stringify(form)
+        body: JSON.stringify({
+          ...form,
+          industry: form.industry === 'Other' ? customIndustry : form.industry,
+          company_url: form.company_url // Explicitly send
+        })
       });
       onComplete(data);
     } catch (err) {
@@ -67,6 +77,13 @@ function Phase0_Setup({ api, onComplete, onBack }) {
           </div>
 
           <div className="input-group">
+            <label className="input-label">Company Website (URL)</label>
+            <input className="input" placeholder="e.g. https://futurecorp.com"
+              value={form.company_url}
+              onChange={e => setForm({...form, company_url: e.target.value})} />
+          </div>
+
+          <div className="input-group">
             <label className="input-label">Industry</label>
             <select className="input" value={form.industry}
               onChange={e => setForm({...form, industry: e.target.value})}>
@@ -74,6 +91,16 @@ function Phase0_Setup({ api, onComplete, onBack }) {
               {INDUSTRIES.map(i => <option key={i} value={i}>{i}</option>)}
             </select>
           </div>
+
+          {form.industry === 'Other' && (
+            <div className="input-group fade-in">
+              <label className="input-label">Custom Industry Name</label>
+              <input className="input" placeholder="e.g. Renewable Energy"
+                value={customIndustry}
+                onChange={e => setCustomIndustry(e.target.value)}
+                autoFocus />
+            </div>
+          )}
 
           <div className="grid-2">
             <div className="input-group">
