@@ -12,19 +12,24 @@ Multi-Agent Architecture:
   Agent 5 → industry_benchmark   (Phase 6 adoption data)
   Agent 6 → prioritisation_roi   (Phase 8 impact/effort matrix)
   Agent 7 → deck_builder         (Phase 11 deliverables)
+
+Database: PostgreSQL (async via asyncpg)
+Redis: Deferred to later stages
 """
 import uuid, random, string, datetime, json, asyncio, os, logging
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
 from pydantic import BaseModel, Field
 from typing import Optional, List
 from dotenv import load_dotenv
 
 ENV_PATH = Path(__file__).resolve().parent / ".env"
-load_dotenv(ENV_PATH,override=True)
+load_dotenv(ENV_PATH, override=True)
 
-# ── Import all 7 agents ───────────────────────────────────────────────────────
+# ── Database and agents ────────────────────────────────────────────────────────
+import db
 from agents import facilitator
 from agents import insight_mining
 from agents import prompt_coaching
@@ -37,7 +42,24 @@ from agents import scraping_agent
 from seed_context import seed_session, build_system_prompt, get_department_names, BUSINESS_CONTEXT
 from schemas import CompanyDNA, ParticipantProfile
 
-app = FastAPI(title="AI Consulting Copilot", version="2.0.0")
+# ─────────────────────────────────────────────────────────────────────────────
+# FastAPI Lifespan Management
+# ─────────────────────────────────────────────────────────────────────────────
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    await db.init_db()
+    logger.info("✅ Database connection pool initialized")
+    yield
+    # Shutdown
+    await db.close_db()
+    logger.info("✅ Database connection pool closed")
+
+app = FastAPI(
+    title="AI Consulting Copilot",
+    version="2.0.0",
+    lifespan=lifespan
+)
 logger = logging.getLogger("copilot.tts")
 
 app.add_middleware(
@@ -47,14 +69,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
 # ─────────────────────────────────────────────────────────────────────────────
-# In-Memory Stores  (swap for PostgreSQL in production)
+# In-Memory Stores (session context cache, not persistent)
 # ─────────────────────────────────────────────────────────────────────────────
-sessions:      dict = {}   # code → session
-participants:  dict = {}   # id   → participant
-phase_data:    dict = {}   # code → { phase_key: [submissions] }
-ws_connections:dict = {}   # code → [WebSocket]
+sessions:      dict = {}   # code → session context (used for agent logic, persisted to DB)
+participants:  dict = {}   # id   → participant context (used for agent logic, persisted to DB)
+phase_data:    dict = {}   # code → { phase_key: [submissions] } (queried from DB)
+ws_connections:dict = {}   # code → [WebSocket] (real-time broadcasts)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -190,13 +211,24 @@ def health():
 # Phase 0 — Session Setup
 # ─────────────────────────────────────────────────────────────────────────────
 @app.post("/session/create")
-def create_session(req: CreateSessionRequest):
+async def create_session(req: CreateSessionRequest):
     code = generate_code()
     while code in sessions:
         code = generate_code()
 
+    # Create session in database
+    db_result = await db.create_session(
+        code=code,
+        host_name=req.host_name,
+        company=req.company,
+        industry=req.industry,
+        participant_count=req.participant_count,
+        duration_mins=req.duration_mins
+    )
+
+    # Build session context for agents (cached in memory)
     session = {
-        "id": str(uuid.uuid4()), "code": code,
+        "id": db_result["id"], "code": code,
         "host_name": req.host_name, "company": req.company,
         "industry": req.industry, "participant_count": req.participant_count,
         "duration_mins": req.duration_mins, "current_phase": 0,
@@ -215,11 +247,12 @@ def create_session(req: CreateSessionRequest):
     # Agent 5: pre-load industry benchmarks
     benchmarks = industry_benchmark.get_industry_benchmarks(req.industry)
     session["workshop_data"]["industry_benchmarks"] = benchmarks
+    await db.update_session_workshop_data(code, "industry_benchmarks", json.dumps(benchmarks))
 
     # Agent 1: generate phase 0 intro message (now seed-aware)
     intro = facilitator.get_phase_intro(0, req.company)
-    print(f"✅ Session: {code} | {req.company} | {req.industry}")
-    print(f"   Seeded: {len(session['known_departments'])} departments, {len(session['pillar_names'])} pillars")
+    logger.info(f"✅ Session created: {code} | {req.company} | {req.industry}")
+    logger.info(f"   Seeded: {len(session['known_departments'])} departments, {len(session['pillar_names'])} pillars")
 
     # Start background company scraping if URL is provided
     if req.company_url:
@@ -229,11 +262,16 @@ def create_session(req: CreateSessionRequest):
 
 
 async def background_company_scrape(session_code: str, url: str):
-    """Background task using Scraping Agent."""
+    """Background task using Scraping Agent. Stores to DB and broadcasts to participants."""
     try:
         dna_data = await scraping_agent.run_company_scrape(session_code, url)
         if dna_data:
+            # Store in database (persistent)
+            await db.store_company_dna(session_code, dna_data)
+            
+            # Cache in memory for agent logic
             sessions[session_code]["company_dna"] = dna_data
+            
             # Broadcast the DNA to the host/participants
             await broadcast(session_code, {"type": "company_dna_ready", "dna": dna_data})
             logger.info(f"Broadcasting Company DNA for {session_code}")
@@ -311,6 +349,7 @@ async def join_participant(req: JoinRequest):
     code = req.session_code.strip().upper()
     if code not in sessions:
         raise HTTPException(404, f"Session '{code}' not found in memory (re-join may be required).")
+    
     p = {
         "id": str(uuid.uuid4()), "session_code": code,
         "name": req.name, "role": req.role, "department": req.department,
@@ -323,8 +362,14 @@ async def join_participant(req: JoinRequest):
     }
     sessions[code]["participants"].append(p["id"])
     participants[p["id"]] = p
-    await broadcast(code, {"type": "participant_joined", "count": len(sessions[code]["participants"]), "name": req.name})
-    print(f"👤 {req.name} ({req.role}) → {code}")
+    
+    logger.info(f"👤 {req.name} ({req.role}) → {code}")
+    
+    await broadcast(code, {
+        "type": "participant_joined",
+        "count": len(sessions[code]["participants"]),
+        "name": req.name
+    })
 
     # Start background LinkedIn scraping if URL is provided
     if req.linkedin_url:
@@ -334,11 +379,16 @@ async def join_participant(req: JoinRequest):
 
 
 async def background_linkedin_scrape(session_code: str, participant_id: str, url: str):
-    """Background task using Scraping Agent."""
+    """Background task using Scraping Agent. Stores to DB and broadcasts to participant."""
     try:
         profile_data = await scraping_agent.run_linkedin_scrape(participant_id, url)
         if profile_data:
+            # Store in database (persistent, with confirmed fields only)
+            await db.create_participant(session_code, profile_data)
+            
+            # Cache in memory for agent logic
             participants[participant_id]["linkedin_profile"] = profile_data
+            
             # Broadcast to the participant (or session)
             await broadcast(session_code, {
                 "type": "participant_profile_ready",
@@ -346,8 +396,21 @@ async def background_linkedin_scrape(session_code: str, participant_id: str, url
                 "profile": profile_data
             })
             logger.info(f"Broadcasting Participant Profile for {participant_id}")
+        else:
+            # Extraction failed or login wall detected — trigger self-entry form
+            logger.warning(f"LinkedIn scrape failed for {participant_id} — trigger self-entry fallback")
+            await broadcast(session_code, {
+                "type": "profile_self_entry_required",
+                "participant_id": participant_id,
+                "message": "Please manually enter your professional details"
+            })
     except Exception as e:
         logger.error(f"LinkedIn scrape failed: {e}")
+        await broadcast(session_code, {
+            "type": "profile_error",
+            "participant_id": participant_id,
+            "message": "Failed to scrape LinkedIn profile. Please enter details manually."
+        })
 
 @app.post("/session/{code}/dna")
 async def save_company_dna(code: str, dna: CompanyDNA):

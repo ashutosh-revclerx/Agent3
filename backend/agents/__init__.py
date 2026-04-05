@@ -1,11 +1,11 @@
 """
 agents/__init__.py
 ──────────────────
-Exports all 7 workshop agents.
+Exports all agents and utility modules.
 Import from here in main.py:
     from agents import facilitator, insight_mining, prompt_coaching, ...
 """
-from agents import (
+from . import (
     facilitator,
     insight_mining,
     prompt_coaching,
@@ -14,6 +14,7 @@ from agents import (
     prioritisation_roi,
     deck_builder,
     scraping_agent,
+    opportunity_generation,
 )
 
 __all__ = [
@@ -25,4 +26,5 @@ __all__ = [
     "prioritisation_roi",
     "deck_builder",
     "scraping_agent",
+    "opportunity_generation",
 ]

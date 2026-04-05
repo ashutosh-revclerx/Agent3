@@ -6,19 +6,24 @@ SCRAPING & EXTRACTION AGENT (Sprint 1 Foundation)
 Responsibility:
   - Interfaces with Nexus API for company website and LinkedIn scraping
   - Uses Gemini to extract structured CompanyDNA and ParticipantProfiles
-  - Validates output using Pydantic schemas
+  - Validates output using Pydantic schemas with confidence flags
   - Generates fun facts and icebreakers
+  - Manages data staleness (30-day TTL for company, 7-day for participant data)
+  - Provides fallback flows when scraping fails or returns partial data
 """
 
 import logging
 import asyncio
 import json
 import os
-from typing import Optional, Dict, Any, List
 import httpx
 import websockets
+import requests
 from pathlib import Path
+from datetime import datetime, timedelta
+from typing import Optional, Dict, Any, List, Literal
 from dotenv import load_dotenv
+from pydantic import ValidationError
 
 from gemini_client import gemini_json, gemini_text
 from schemas import CompanyDNA, ParticipantProfile
@@ -120,40 +125,236 @@ def sanitise_markdown(text: str) -> str:
         cleaned = cleaned.replace(p, "[STRIPPED]")
     return cleaned[:50000] # Limit size for token safety
 
+def is_data_stale(scraped_at: Optional[datetime], ttl_days: int = 30) -> bool:
+    """
+    Check if scraped data has exceeded its time-to-live.
+    
+    Args:
+        scraped_at: Timestamp when data was scraped
+        ttl_days: Days until data is considered stale (30 for company, 7 for participant)
+    
+    Returns:
+        True if data is stale or missing timestamp, False otherwise
+    """
+    if not scraped_at:
+        return True
+    delta = datetime.utcnow() - scraped_at
+    return delta > timedelta(days=ttl_days)
+
+def get_weather_and_sports(location: str) -> Dict[str, Any]:
+    """
+    Fetch local weather and sports context for a given location.
+    Uses OpenWeather API (free tier) and Gemini for sports highlights.
+    
+    Args:
+        location: City or location string (e.g., "San Francisco")
+    
+    Returns:
+        Dict with weather, sports_icebreaker, local_time, or empty dict on failure
+    """
+    if not location:
+        return {}
+    
+    try:
+        # Try OpenWeather API (requires API key in .env)
+        openweather_key = os.getenv("OPENWEATHER_API_KEY", "")
+        weather_data = {}
+        
+        if openweather_key:
+            try:
+                response = requests.get(
+                    f"https://api.openweathermap.org/data/2.5/weather",
+                    params={"q": location, "appid": openweather_key, "units": "metric"},
+                    timeout=5
+                )
+                if response.status_code == 200:
+                    data = response.json()
+                    weather_data = {
+                        "weather": f"{data['main']['temp']:.0f}°C and {data['weather'][0]['main']}",
+                        "local_time": f"~{data['sys'].get('sunset', 'N/A')}"
+                    }
+            except Exception as e:
+                logger.warning(f"OpenWeather API failed for {location}: {e}")
+        
+        # Use Gemini for sports and timezone context
+        prompt = f"""
+        Find current local context for {location}:
+        1. Local Sports: Is there a major local sports team playing today or recently? If so, what's a fun highlight?
+        2. Timezone: What is the current local time zone?
+        
+        Return JSON only:
+        {{"sports_icebreaker": "e.g. The Lakers won a thriller last night", "timezone": "e.g. PST"}}
+        """
+        
+        try:
+            sports_result = gemini_json(prompt)
+            if sports_result:
+                weather_data.update(sports_result)
+            return weather_data
+        except Exception as e:
+            logger.warning(f"Scraping Agent: Failed to get sports context for {location}: {e}")
+            return weather_data
+    except Exception as e:
+        logger.error(f"Scraping Agent: Failed to get weather/sports for {location}: {e}")
+        return {}
+
 def extract_company_dna(markdown_content: str, url: str) -> Optional[CompanyDNA]:
+    """
+    Extract structured company data from scraped markdown content.
+    Uses Gemini with strict schema validation and confidence flagging.
+    
+    Args:
+        markdown_content: Raw markdown from website scrape
+        url: Source URL for traceability
+    
+    Returns:
+        CompanyDNA object with confidence flag, or None on extraction failure
+    """
+    if not markdown_content or len(markdown_content.strip()) < 50:
+        logger.warning(f"Extraction: Insufficient content from {url} for Company DNA")
+        return None
+    
     markdown_content = sanitise_markdown(markdown_content)
+    
     prompt = f"""
     Extract structured data from the company website content below.
-    Markdown content:
+    Return ONLY valid JSON matching this schema:
+    {{
+        "company_name": "Company Name",
+        "vision": "The company's core mission and vision",
+        "goals": ["goal1", "goal2", ...],
+        "products": ["product1", "product2", ...],
+        "tone": "professional/innovative/customer-focused/etc",
+        "recent_news": ["news1", "news2", ...]
+    }}
+    
+    If a field cannot be confidently extracted, use an empty string or empty list.
+    
+    Website content:
     {markdown_content}
+    
     URL: {url}
     """
+    
     try:
         result = gemini_json(prompt)
-        if result:
-            result["source_url"] = url
-            return CompanyDNA(**result)
+        if not result:
+            logger.warning(f"Extraction: Gemini returned empty result for {url}")
+            return None
+        
+        # Ensure required fields
+        if "company_name" not in result or not result["company_name"]:
+            logger.warning(f"Extraction: Missing company_name in result from {url}")
+            return None
+        
+        result["source_url"] = url
+        result["scraped_at"] = datetime.utcnow()
+        
+        # Determine confidence level
+        required_fields = ["company_name", "vision", "goals", "products", "tone"]
+        extracted_count = sum(1 for field in required_fields if result.get(field))
+        
+        if extracted_count >= 4:
+            result["confidence"] = "complete"
+        elif extracted_count >= 2:
+            result["confidence"] = "partial"
+        else:
+            result["confidence"] = "fallback"
+        
+        # Validate against schema
+        dna = CompanyDNA(**result)
+        logger.info(f"Extraction: Company DNA extracted with confidence={dna.confidence} from {url}")
+        return dna
+    except ValidationError as e:
+        logger.error(f"Extraction: Schema validation failed for {url}: {e}")
+        return None
     except Exception as e:
         logger.error(f"Extraction Agent: Failed to extract DNA from {url}: {e}")
-    return None
+        return None
 
 def extract_participant_profile(markdown_content: str, url: str) -> Optional[ParticipantProfile]:
+    """
+    Extract professional profile data from LinkedIn or other profile page.
+    Uses Gemini with strict schema validation and confidence flagging.
+    
+    Args:
+        markdown_content: Raw markdown from profile scrape
+        url: LinkedIn or profile URL
+    
+    Returns:
+        ParticipantProfile object with confidence flag, or None on extraction failure
+    """
+    if not markdown_content or len(markdown_content.strip()) < 30:
+        logger.warning(f"Extraction: Insufficient content from {url} for Participant Profile")
+        return None
+    
     markdown_content = sanitise_markdown(markdown_content)
+    
+    # Check if this is a login wall (LinkedIn returns login page if not authenticated)
+    login_indicators = ["Sign in", "Sign up", "Join LinkedIn", "Log in to LinkedIn"]
+    if any(indicator in markdown_content for indicator in login_indicators):
+        logger.warning(f"Extraction: Login wall detected at {url} — routing to self-entry fallback")
+        return None
+    
     prompt = f"""
-    Extract professional profile data from the LinkedIn profile content below.
-    Markdown content:
+    Extract professional profile data from the LinkedIn or profile page content below.
+    Return ONLY valid JSON matching this schema:
+    {{
+        "name": "Full Name",
+        "role": "Job Title",
+        "company": "Company Name",
+        "headline": "Professional headline",
+        "summary": "Short bio or summary",
+        "skills": ["skill1", "skill2", ...],
+        "location": "City, Country",
+        "industry": "Industry or field"
+    }}
+    
+    If a field cannot be extracted, use an empty string or empty list.
+    Extract only confirmed information visible on the profile.
+    
+    Profile content:
     {markdown_content}
+    
     URL: {url}
     """
+    
     try:
         result = gemini_json(prompt)
-        if result:
-            result["linkedin_url"] = url
-            result["source"] = "linkedin"
-            return ParticipantProfile(**result)
+        if not result:
+            logger.warning(f"Extraction: Gemini returned empty result for {url}")
+            return None
+        
+        # Ensure required fields
+        if "name" not in result or not result["name"]:
+            logger.warning(f"Extraction: Missing name in result from {url}")
+            return None
+        
+        result["linkedin_url"] = url
+        result["source"] = "linkedin"
+        result["scraped_at"] = datetime.utcnow()
+        
+        # Determine confidence level
+        required_fields = ["name", "role", "company", "headline", "location"]
+        extracted_count = sum(1 for field in required_fields if result.get(field))
+        
+        if extracted_count >= 4:
+            result["confidence"] = "complete"
+        elif extracted_count >= 2:
+            result["confidence"] = "partial"
+        else:
+            result["confidence"] = "fallback"
+        
+        # Validate against schema
+        profile = ParticipantProfile(**result)
+        logger.info(f"Extraction: Participant Profile extracted with confidence={profile.confidence} from {url}")
+        return profile
+    except ValidationError as e:
+        logger.error(f"Extraction: Schema validation failed for {url}: {e}")
+        return None
     except Exception as e:
         logger.error(f"Extraction Agent: Failed to extract profile from {url}: {e}")
-    return None
+        return None
 
 def generate_fun_fact(profile: ParticipantProfile) -> Optional[str]:
     prompt = f"Generate ONE fun fact for {profile.name} based on their profile: {profile.model_dump_json()}"
@@ -167,56 +368,90 @@ def generate_fun_fact(profile: ParticipantProfile) -> Optional[str]:
 
 # ── Agent Actions ──────────────────────────────────────────────────────────
 
-async def run_company_scrape(session_code: str, url: str) -> Optional[Dict[str, Any]]:
+async def run_company_scrape(session_code: str, url: str, force_refresh: bool = False) -> Optional[Dict[str, Any]]:
+    """
+    Scrape company website and extract structured Company DNA.
+    
+    Args:
+        session_code: Session identifier for logging
+        url: Company website URL
+        force_refresh: Ignore TTL and re-scrape (used for manual refresh)
+    
+    Returns:
+        CompanyDNA dict with confidence flag, or None on complete failure
+    """
     try:
-        job_id = await _nexus.submit_scrape(url)
-        result = await _nexus.get_result_ws(job_id)
+        logger.info(f"Scraping Agent: Starting company scrape for {session_code} from {url}")
+        
+        job_id = await _nexus.submit_scrape(url, output_format="markdown", js_render=False)
+        logger.info(f"Scraping Agent: Submitted job {job_id} for {url}")
+        
+        result = await _nexus.get_result_ws(job_id, timeout=60.0)
+        
         if result.get("status") == "done":
-            dna = extract_company_dna(result.get("content", ""), url)
+            content = result.get("content", "")
+            dna = extract_company_dna(content, url)
+            
             if dna:
-                return dna.model_dump()
+                dna_dict = dna.model_dump()
+                logger.info(f"Scraping Agent: Company DNA extracted for {session_code} with confidence={dna.confidence}")
+                return dna_dict
+            else:
+                logger.warning(f"Scraping Agent: Extraction returned None for {session_code}")
+                return None
+        else:
+            logger.error(f"Scraping Agent: Scrape failed with status {result.get('status')} for {url}")
+            return None
     except Exception as e:
         logger.error(f"Scraping Agent: Company scrape for {session_code} failed: {e}")
-    return None
+        return None
 
-async def get_local_icebreakers(location: str) -> Dict[str, Any]:
-    """
-    Fetches local weather and sports context for a given location.
-    Uses Gemini to synthesise current 'vibe' if no direct API is available.
-    """
-    if not location: return {}
-    
-    prompt = f"""
-    Find current local context for {location}:
-    1. Weather: What's the current temperature and sky condition there?
-    2. Local Sports: Is there a major local sports team playing today or recently? If so, what's a fun highlight?
-    3. Timezone: What is the current local time?
-    
-    Return JSON only:
-    {{"weather": "e.g. 18°C and Sunny", "sports_icebreaker": "e.g. The Lakers won a thriller last night", "local_time": "e.g. 2:30 PM"}}
-    """
-    try:
-        # Grounding with search if available, or just Gemini's knowledge
-        result = gemini_json(prompt)
-        return result or {}
-    except Exception as e:
-        logger.error(f"Scraping Agent: Failed to get icebreakers for {location}: {e}")
-        return {}
 
 async def run_linkedin_scrape(participant_id: str, url: str) -> Optional[Dict[str, Any]]:
+    """
+    Scrape LinkedIn profile and extract structured Participant Profile.
+    
+    Args:
+        participant_id: Participant identifier for logging
+        url: LinkedIn profile URL
+    
+    Returns:
+        ParticipantProfile dict with fun fact and local context, or None on failure
+        Returns None if login wall detected — triggers self-entry fallback
+    """
     try:
-        job_id = await _nexus.submit_scrape(url, js_render=True)
-        result = await _nexus.get_result_ws(job_id)
+        logger.info(f"Scraping Agent: Starting LinkedIn profile scrape for {participant_id} from {url}")
+        
+        # Use js_render=True for React SPA content loading
+        job_id = await _nexus.submit_scrape(url, output_format="markdown", js_render=True)
+        logger.info(f"Scraping Agent: Submitted LinkedIn job {job_id}")
+        
+        result = await _nexus.get_result_ws(job_id, timeout=60.0)
+        
         if result.get("status") == "done":
-            profile = extract_participant_profile(result.get("content", ""), url)
+            content = result.get("content", "")
+            profile = extract_participant_profile(content, url)
+            
             if profile:
                 profile_data = profile.model_dump()
-                # Personalise: Fun Fact + Local Icebreakers
-                profile_data["fun_fact"] = generate_fun_fact(profile)
-                if profile.location:
-                    profile_data["local_context"] = await get_local_icebreakers(profile.location)
                 
+                # Generate fun fact from confirmed data
+                profile_data["fun_fact"] = generate_fun_fact(profile)
+                
+                # Get local context (weather, sports, timezone)
+                if profile.location:
+                    local_context = get_weather_and_sports(profile.location)
+                    profile_data["local_context"] = local_context
+                
+                logger.info(f"Scraping Agent: LinkedIn profile extracted for {participant_id} with confidence={profile.confidence}")
                 return profile_data
+            else:
+                # Extraction returned None (likely login wall or insufficient content)
+                logger.warning(f"Scraping Agent: Profile extraction failed for {participant_id} — routing to self-entry fallback")
+                return None
+        else:
+            logger.error(f"Scraping Agent: LinkedIn scrape failed with status {result.get('status')} for {url}")
+            return None
     except Exception as e:
         logger.error(f"Scraping Agent: LinkedIn scrape for {participant_id} failed: {e}")
-    return None
+        return None
