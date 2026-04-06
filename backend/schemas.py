@@ -11,11 +11,11 @@ class CompanyDNA(BaseModel):
     vision: str = Field(description="The company's core mission and vision for the future.")
     goals: List[str] = Field(default_factory=list, description="Key strategic goals or objectives mentioned on the website.")
     products: List[str] = Field(default_factory=list, description="Core products or services offered by the company.")
-    tone: str = Field(description="The brand's voice and tone (e.g., professional, innovative, customer-focused).")
     recent_news: List[str] = Field(default_factory=list, description="Recent announcements or highlights from the company.")
     confidence: Literal["complete", "partial", "fallback"] = "partial"
     scraped_at: datetime = Field(default_factory=datetime.utcnow)
     source_url: Optional[str] = None
+    raw_markdown: Optional[str] = None
 
 class ParticipantProfile(BaseModel):
     """
@@ -24,9 +24,8 @@ class ParticipantProfile(BaseModel):
     """
     name: str
     role: str
-    company: str
+    company: Optional[str] = None
     headline: Optional[str] = None
-    summary: Optional[str] = None
     skills: List[str] = Field(default_factory=list)
     location: Optional[str] = None
     industry: Optional[str] = None
@@ -34,6 +33,8 @@ class ParticipantProfile(BaseModel):
     source: Literal["linkedin", "manual"] = "manual"
     scraped_at: Optional[datetime] = None
     linkedin_url: Optional[str] = None
+    fun_fact: Optional[str] = None
+    local_context: Optional[Dict] = None
 
 class ScrapeResult(BaseModel):
     """

@@ -9,13 +9,11 @@ Docs:    https://googleapis.github.io/python-genai/
 """
 import ast
 import os, json, re
-from pathlib import Path
 from google import genai
 from google.genai import types
-from dotenv import load_dotenv
+from env_loader import load_env
 
-ENV_PATH = Path(__file__).resolve().parent / ".env"
-load_dotenv(ENV_PATH)
+load_env()
 
 # ── Singleton client ──────────────────────────────────────────────────────────
 _client: genai.Client | None = None
@@ -212,6 +210,33 @@ def gemini_json(prompt: str, model: str = DEFAULT_MODEL) -> dict | list | None:
     except Exception as e:
         print(f"gemini_json error: {e}")
         return None
+
+
+def gemini_json_with_web_search(prompt: str,
+                                model: str = "gemini-2.0-flash") -> dict | list | None:
+    """
+    Send a prompt and allow Gemini to use Google Search grounding.
+    Falls back to plain JSON generation if grounding is unavailable.
+    """
+    client = get_client()
+    if not client:
+        return None
+    try:
+        response = client.models.generate_content(
+            model=model,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                temperature=0.3,
+                max_output_tokens=2048,
+                response_mime_type="application/json",
+                tools=[types.Tool(google_search=types.GoogleSearch())],
+            ),
+        )
+        text = _response_text(response)
+        return _parse_json_response(text)
+    except Exception as e:
+        print(f"gemini_json_with_web_search error: {e}")
+        return gemini_json(prompt, model=DEFAULT_MODEL)
 
 
 def gemini_text(prompt: str, system: str = "",

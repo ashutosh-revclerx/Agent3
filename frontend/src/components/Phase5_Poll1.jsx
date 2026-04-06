@@ -1,5 +1,4 @@
 import { useState, useEffect, useRef } from 'react'
-import './phases.css'
 
 const PILLAR_ICONS = {
   'Sales & Marketing':        '◆',

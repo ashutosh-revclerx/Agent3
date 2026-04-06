@@ -17,14 +17,14 @@ This guide covers setting up and running the PostgreSQL database with Docker for
 Copy the example environment file:
 
 ```bash
-cp .env.example .env
+cp backend/.env.example backend/.env
 ```
 
-Update `.env` with your API keys if needed:
+Update `backend/.env` with your API keys if needed:
 
 ```
 GEMINI_API_KEY=your_key_here
-NEXUS_API_KEY=nxs_ZsMlNFaSe9b-994Fh-ttIV3rNyuk72PN
+NEXUS_API_KEY=your_nexus_key_here
 DB_USER=copilot_user
 DB_PASSWORD=copilot_password
 DB_HOST=localhost
@@ -259,7 +259,7 @@ If not, start it:
 
 ```bash
 docker-compose up -d postgres
-docker-compose exec postgres pg_isready -U copilot_user
+docker-compose exec postgres pg_isready -U copilot_user -d copilot_db
 ```
 
 #### **Schema Not Applied**

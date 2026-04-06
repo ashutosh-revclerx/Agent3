@@ -19,18 +19,15 @@ import os
 import httpx
 import websockets
 import requests
-from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List, Literal
-from dotenv import load_dotenv
 from pydantic import ValidationError
+from env_loader import load_env
 
-from gemini_client import gemini_json, gemini_text
+from gemini_client import gemini_json, gemini_json_with_web_search, gemini_text
 from schemas import CompanyDNA, ParticipantProfile
 
-# Load env from same folder
-ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
-load_dotenv(ENV_PATH)
+load_env()
 
 logger = logging.getLogger("copilot.scraping_agent")
 
@@ -176,7 +173,7 @@ def get_weather_and_sports(location: str) -> Dict[str, Any]:
             except Exception as e:
                 logger.warning(f"OpenWeather API failed for {location}: {e}")
         
-        # Use Gemini for sports and timezone context
+        # Use Gemini web search grounding for fresher sports and timezone context.
         prompt = f"""
         Find current local context for {location}:
         1. Local Sports: Is there a major local sports team playing today or recently? If so, what's a fun highlight?
@@ -187,7 +184,7 @@ def get_weather_and_sports(location: str) -> Dict[str, Any]:
         """
         
         try:
-            sports_result = gemini_json(prompt)
+            sports_result = gemini_json_with_web_search(prompt)
             if sports_result:
                 weather_data.update(sports_result)
             return weather_data
@@ -224,7 +221,6 @@ def extract_company_dna(markdown_content: str, url: str) -> Optional[CompanyDNA]
         "vision": "The company's core mission and vision",
         "goals": ["goal1", "goal2", ...],
         "products": ["product1", "product2", ...],
-        "tone": "professional/innovative/customer-focused/etc",
         "recent_news": ["news1", "news2", ...]
     }}
     
@@ -241,6 +237,34 @@ def extract_company_dna(markdown_content: str, url: str) -> Optional[CompanyDNA]
         if not result:
             logger.warning(f"Extraction: Gemini returned empty result for {url}")
             return None
+
+        missing_fields = [
+            field for field in ["vision", "goals", "products", "recent_news"]
+            if not result.get(field)
+        ]
+        if missing_fields:
+            enrichment_prompt = f"""
+            Use Google Search grounding to enrich this company profile for {url}.
+            Keep only information that is likely current and externally verifiable.
+
+            Existing extracted data:
+            {json.dumps(result, default=str)}
+
+            Fill only missing or weak fields from this schema:
+            {{
+                "vision": "updated company mission/positioning if clear",
+                "goals": ["goal1", "goal2"],
+                "products": ["product1", "product2"],
+                "recent_news": ["recent development 1", "recent development 2"]
+            }}
+
+            Return JSON only.
+            """
+            enrichment = gemini_json_with_web_search(enrichment_prompt)
+            if isinstance(enrichment, dict):
+                for field in missing_fields:
+                    if enrichment.get(field):
+                        result[field] = enrichment[field]
         
         # Ensure required fields
         if "company_name" not in result or not result["company_name"]:
@@ -249,11 +273,12 @@ def extract_company_dna(markdown_content: str, url: str) -> Optional[CompanyDNA]
         
         result["source_url"] = url
         result["scraped_at"] = datetime.utcnow()
+        result["raw_markdown"] = markdown_content
         
         # Determine confidence level
-        required_fields = ["company_name", "vision", "goals", "products", "tone"]
+        required_fields = ["company_name", "vision", "goals", "products"]
         extracted_count = sum(1 for field in required_fields if result.get(field))
-        
+
         if extracted_count >= 4:
             result["confidence"] = "complete"
         elif extracted_count >= 2:
@@ -304,7 +329,6 @@ def extract_participant_profile(markdown_content: str, url: str) -> Optional[Par
         "role": "Job Title",
         "company": "Company Name",
         "headline": "Professional headline",
-        "summary": "Short bio or summary",
         "skills": ["skill1", "skill2", ...],
         "location": "City, Country",
         "industry": "Industry or field"

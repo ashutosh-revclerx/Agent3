@@ -1,5 +1,4 @@
 import { useState, useEffect, useRef } from 'react'
-import './phases.css'
 
 const PROBLEM_TAGS = [
   'Repetitive', 'Time-consuming', 'Manual', 'Error-prone',

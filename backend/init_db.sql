@@ -1,6 +1,8 @@
 -- Initialize Copilot Database Schema
 -- Run on container startup
 
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
 CREATE TABLE IF NOT EXISTS sessions (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     code VARCHAR(6) UNIQUE NOT NULL,
@@ -14,9 +16,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     revealed_phases TEXT[] DEFAULT ARRAY[]::TEXT[],
-    workshop_data JSONB DEFAULT '{}',
-    INDEX idx_code (code),
-    INDEX idx_created_at (created_at)
+    workshop_data JSONB DEFAULT '{}'
 );
 
 CREATE TABLE IF NOT EXISTS company_dna (
@@ -34,10 +34,7 @@ CREATE TABLE IF NOT EXISTS company_dna (
     expires_at TIMESTAMP NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    is_active BOOLEAN DEFAULT TRUE,
-    INDEX idx_session_id (session_id),
-    INDEX idx_expires_at (expires_at),
-    INDEX idx_company_name (company_name)
+    is_active BOOLEAN DEFAULT TRUE
 );
 
 CREATE TABLE IF NOT EXISTS participants (
@@ -58,10 +55,7 @@ CREATE TABLE IF NOT EXISTS participants (
     expires_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    is_active BOOLEAN DEFAULT TRUE,
-    INDEX idx_session_id (session_id),
-    INDEX idx_name (name),
-    INDEX idx_expires_at (expires_at)
+    is_active BOOLEAN DEFAULT TRUE
 );
 
 CREATE TABLE IF NOT EXISTS participant_extras (
@@ -79,16 +73,21 @@ CREATE TABLE IF NOT EXISTS phase_data (
     phase_key VARCHAR(100) NOT NULL,
     participant_id UUID REFERENCES participants(id) ON DELETE SET NULL,
     submission JSONB NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    INDEX idx_session_phase (session_id, phase_key),
-    INDEX idx_participant_id (participant_id)
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Create indexes for faster queries
 CREATE INDEX IF NOT EXISTS idx_sessions_code ON sessions(code);
+CREATE INDEX IF NOT EXISTS idx_sessions_created_at ON sessions(created_at);
 CREATE INDEX IF NOT EXISTS idx_company_dna_session ON company_dna(session_id) WHERE is_active = TRUE;
+CREATE INDEX IF NOT EXISTS idx_company_dna_expires_at ON company_dna(expires_at);
+CREATE INDEX IF NOT EXISTS idx_company_dna_company_name ON company_dna(company_name);
 CREATE INDEX IF NOT EXISTS idx_participants_session ON participants(session_id) WHERE is_active = TRUE;
+CREATE INDEX IF NOT EXISTS idx_participants_name ON participants(name);
+CREATE INDEX IF NOT EXISTS idx_participants_expires_at ON participants(expires_at);
 CREATE INDEX IF NOT EXISTS idx_phase_data_session ON phase_data(session_id);
+CREATE INDEX IF NOT EXISTS idx_phase_data_session_phase ON phase_data(session_id, phase_key);
+CREATE INDEX IF NOT EXISTS idx_phase_data_participant_id ON phase_data(participant_id);
 
 -- Create function to automatically update updated_at timestamp
 CREATE OR REPLACE FUNCTION update_updated_at_column()

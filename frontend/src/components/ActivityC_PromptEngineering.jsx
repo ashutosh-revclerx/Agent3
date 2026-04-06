@@ -1,6 +1,5 @@
 import VoiceTextInput from './Voicetextinput'
 import { useState, useEffect } from 'react'
-import './phases.css'
 
 const SCORE_DIMENSIONS = [
   { key: 'clarity',     label: 'Clarity',     desc: 'Is the task clearly stated?' },

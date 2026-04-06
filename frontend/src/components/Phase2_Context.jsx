@@ -1,7 +1,6 @@
 import VoiceTextInput from './Voicetextinput'
 import AgentChat from './Agentchat'
 import { useState, useEffect, useRef } from 'react'
-import './phases.css'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ROLE-BASED QUESTION SETS

@@ -17,16 +17,15 @@ Database: PostgreSQL (async via asyncpg)
 Redis: Deferred to later stages
 """
 import uuid, random, string, datetime, json, asyncio, os, logging
-from pathlib import Path
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from pydantic import BaseModel, Field
 from typing import Optional, List
-from dotenv import load_dotenv
+import httpx
+from env_loader import load_env
 
-ENV_PATH = Path(__file__).resolve().parent / ".env"
-load_dotenv(ENV_PATH, override=True)
+load_env()
 
 # ── Database and agents ────────────────────────────────────────────────────────
 import db
@@ -64,7 +63,10 @@ logger = logging.getLogger("copilot.tts")
 
 app.add_middleware(
     CORSMiddleware,
+    # Dev-friendly: always emit CORS headers so browser errors don't hide server errors.
+    # If you need to lock this down later, replace with explicit origins.
     allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -112,7 +114,7 @@ async def broadcast(code: str, message: dict):
 # ─────────────────────────────────────────────────────────────────────────────
 class CreateSessionRequest(BaseModel):
     host_name: str;  company: str;  industry: str
-    participant_count: int;  duration_mins: int = 90
+    participant_count: int = 0;  duration_mins: int = 90
     company_url: Optional[str] = None # Added for website scraping
     company_linkedin_url: Optional[str] = None
 
@@ -189,6 +191,17 @@ class RevealRequest(BaseModel):
     session_code: str;  phase: str
 
 
+class LiveAvatarEmbedRequest(BaseModel):
+    """Request to generate a LiveAvatar embed URL for UI/presentation only.
+    
+    LiveAvatar scope: VIDEO, VOICE, UI only.
+    NOT for data processing, AI logic, or backend computation.
+    """
+    session_code: Optional[str] = None
+    participant_name: Optional[str] = None
+    participant_role: Optional[str] = None
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Health & Root
 # ─────────────────────────────────────────────────────────────────────────────
@@ -207,6 +220,71 @@ def health():
     }
 
 
+@app.post("/liveavatar/embed")
+async def create_liveavatar_embed(req: LiveAvatarEmbedRequest):
+    """
+    Create a LiveAvatar embed URL for the frontend iframe.
+    
+    ⚠️  SCOPE: VIDEO, VOICE, UI only.
+    - Generates iframe URLs for avatar video/voice presentation
+    - Stores API credentials server-side (browser never sees them)
+    - DO NOT pass data processing, AI logic, or backend computation to LiveAvatar
+    
+    Uses backend-held API credentials so the browser never sees them.
+    """
+    api_key = os.getenv("LIVEAVATAR_API_KEY", "").strip()
+    avatar_id = os.getenv("LIVEAVATAR_AVATAR_ID", "").strip()
+    context_id = os.getenv("LIVEAVATAR_CONTEXT_ID", "").strip()
+    sandbox = os.getenv("LIVEAVATAR_SANDBOX", "true").strip().lower() in {"1", "true", "yes", "on"}
+
+    if not api_key or not avatar_id or not context_id:
+        raise HTTPException(
+            503,
+            "LiveAvatar is not configured. Set LIVEAVATAR_API_KEY, LIVEAVATAR_AVATAR_ID, and LIVEAVATAR_CONTEXT_ID.",
+        )
+
+    payload = {
+        "avatar_id": avatar_id,
+        "context_id": context_id,
+        "is_sandbox": sandbox,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            resp = await client.post(
+                "https://api.liveavatar.com/v2/embeddings",
+                headers={
+                    "X-API-KEY": api_key,
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+    except httpx.HTTPError as exc:
+        logger.error("LiveAvatar embed request failed: %s", exc)
+        raise HTTPException(502, "Could not reach LiveAvatar right now.")
+
+    if resp.status_code >= 400:
+        logger.error("LiveAvatar embed error %s: %s", resp.status_code, resp.text)
+        raise HTTPException(502, f"LiveAvatar embed error: {resp.status_code}")
+
+    data = resp.json()
+    embed_url = (
+        data.get("url")
+        or data.get("embed_url")
+        or data.get("data", {}).get("url")
+        or data.get("data", {}).get("embed_url")
+    )
+    if not embed_url:
+        logger.error("LiveAvatar embed response missing URL: %s", data)
+        raise HTTPException(502, "LiveAvatar did not return an embed URL.")
+
+    return {
+        "embed_url": embed_url,
+        "sandbox": sandbox,
+        "avatar_id": avatar_id,
+    }
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Phase 0 — Session Setup
 # ─────────────────────────────────────────────────────────────────────────────
@@ -217,14 +295,16 @@ async def create_session(req: CreateSessionRequest):
         code = generate_code()
 
     # Create session in database
-    db_result = await db.create_session(
-        code=code,
-        host_name=req.host_name,
-        company=req.company,
-        industry=req.industry,
-        participant_count=req.participant_count,
-        duration_mins=req.duration_mins
-    )
+    try:
+        db_result = await db.create_session(
+            code=code,
+            host_name=req.host_name,
+            company=req.company,
+            industry=req.industry,
+        )
+    except Exception as e:
+        logger.exception("create_session: database insert failed")
+        raise HTTPException(500, f"Database error creating session: {type(e).__name__}: {e}")
 
     # Build session context for agents (cached in memory)
     session = {
@@ -247,7 +327,7 @@ async def create_session(req: CreateSessionRequest):
     # Agent 5: pre-load industry benchmarks
     benchmarks = industry_benchmark.get_industry_benchmarks(req.industry)
     session["workshop_data"]["industry_benchmarks"] = benchmarks
-    await db.update_session_workshop_data(code, "industry_benchmarks", json.dumps(benchmarks))
+    session["workshop_data"]["industry_benchmark_status"] = "idle"
 
     # Agent 1: generate phase 0 intro message (now seed-aware)
     intro = facilitator.get_phase_intro(0, req.company)
@@ -257,6 +337,8 @@ async def create_session(req: CreateSessionRequest):
     # Start background company scraping if URL is provided
     if req.company_url:
         asyncio.create_task(background_company_scrape(code, req.company_url))
+    if req.industry.strip():
+        asyncio.create_task(background_industry_benchmark_prefetch(code))
 
     return {**session, "intro_message": intro}
 
@@ -277,6 +359,42 @@ async def background_company_scrape(session_code: str, url: str):
             logger.info(f"Broadcasting Company DNA for {session_code}")
     except Exception as e:
         logger.error(f"Scraping Agent: Company scrape failed for {session_code}: {e}")
+
+
+async def background_industry_benchmark_prefetch(session_code: str):
+    """Pre-fetch live industry benchmark data as soon as the host provides an industry."""
+    try:
+        session = sessions.get(session_code)
+        if not session:
+            return
+
+        industry = (session.get("industry") or "").strip()
+        company = (session.get("company") or "").strip()
+        if not industry:
+            return
+
+        workshop_data = session.setdefault("workshop_data", {})
+        workshop_data["industry_benchmark_status"] = "loading"
+
+        enriched = await asyncio.to_thread(
+            industry_benchmark.enrich_with_gemini,
+            industry,
+            company,
+            [],
+        )
+        workshop_data["industry_benchmark_prefetch"] = enriched
+        workshop_data["industry_benchmark_status"] = "ready"
+
+        await broadcast(
+            session_code,
+            {"type": "industry_benchmark_prefetched", "data": enriched},
+        )
+        logger.info("Industry benchmark prefetched for %s (%s)", session_code, industry)
+    except Exception as e:
+        session = sessions.get(session_code)
+        if session:
+            session.setdefault("workshop_data", {})["industry_benchmark_status"] = "failed"
+        logger.error("Industry benchmark prefetch failed for %s: %s", session_code, e)
 
 
 @app.get("/session/{code}")
@@ -428,6 +546,106 @@ async def save_participant_profile(id: str, profile: ParticipantProfile):
     participants[id]["role"] = profile.role
     logger.info(f"Participant confirmed profile for {id}")
     return {"status": "saved"}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 1 Extended — Survey Questions / Coverage Map  [Agent 1: Facilitator]
+# ─────────────────────────────────────────────────────────────────────────────
+class SurveyResponseRequest(BaseModel):
+    session_code: str
+    participant_id: Optional[str] = None
+    question_key: str  # e.g., "company_goals", "company_ai_maturity", "it_landscape", "success_definition"
+    response: str
+
+
+@app.get("/phase/survey/{session_code}/{question_key}")
+async def get_survey_question(session_code: str, question_key: str, participant_id: Optional[str] = None):
+    """
+    Dynamically generate a Phase 1 survey question using LLM.
+    Question keys: company_goals, company_ai_maturity, it_landscape, success_definition
+    """
+    code = session_code.strip().upper()
+    if code not in sessions:
+        raise HTTPException(404, "Session not found")
+    
+    s = sessions[code]
+    company = s.get("company", "")
+    industry = s.get("industry", "")
+    
+    question = None
+    
+    if question_key == "company_goals":
+        objectives = [obj.get("objectives", []) for obj in get_store(code, "phase2")]
+        flat_objectives = [o for obj_list in objectives for o in obj_list]
+        question = facilitator.get_company_goals_checkup(company, flat_objectives)
+    
+    elif question_key == "company_ai_maturity":
+        question = facilitator.get_company_ai_maturity_question(company, industry)
+    
+    elif question_key == "it_landscape":
+        question = facilitator.get_it_landscape_question(company)
+    
+    elif question_key == "success_definition":
+        # This is per-participant
+        if participant_id and participant_id in participants:
+            p = participants[participant_id]
+            question = facilitator.get_success_definition_prompt(p.get("name", ""), p.get("role", ""), company)
+        else:
+            question = facilitator.get_success_definition_prompt("", "", company)
+    
+    else:
+        raise HTTPException(400, f"Unknown question key: {question_key}")
+    
+    if not question:
+        question = f"Tell us more about {question_key} at your organization."
+    
+    return {"question_key": question_key, "question": question}
+
+
+@app.post("/phase/survey-response")
+async def submit_survey_response(req: SurveyResponseRequest):
+    """
+    Captures Phase 1 survey responses and persists to phase_data.
+    """
+    code = req.session_code.strip().upper()
+    if code not in sessions:
+        raise HTTPException(404, "Session not found")
+    
+    # Store response to phase_data
+    store(code, "phase1_survey", {
+        "participant_id": req.participant_id,
+        "question_key": req.question_key,
+        "response": req.response,
+        "submitted_at": datetime.datetime.utcnow().isoformat(),
+    })
+    
+    all_responses = get_store(code, "phase1_survey")
+    s = sessions[code]
+    
+    # Aggregate responses and update session workshop_data
+    survey_map = {}
+    for resp in all_responses:
+        qkey = resp.get("question_key", "")
+        if qkey not in survey_map:
+            survey_map[qkey] = []
+        survey_map[qkey].append(resp)
+    
+    s["workshop_data"]["phase1_survey_responses"] = survey_map
+    
+    # Broadcast survey progress
+    await broadcast(code, {
+        "type": "survey_response_recorded",
+        "question_key": req.question_key,
+        "total_responses": len(all_responses),
+    })
+    
+    logger.info(f"Survey response recorded: {code} | {req.question_key} | participant {req.participant_id}")
+    
+    return {
+        "status": "recorded",
+        "question_key": req.question_key,
+        "total_responses": len(all_responses),
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -738,11 +956,16 @@ def build_benchmark_payload(session_code: str):
     if s["workshop_data"].get("benchmark"):
         return code, s["workshop_data"]["benchmark"]
 
+    prefetched = s["workshop_data"].get("industry_benchmark_prefetch")
     raw_use_cases       = s["workshop_data"].get("use_cases", [])
     org_use_cases       = [uc.get("title", "") for uc in raw_use_cases]
 
-    # Agent 5: Tavily search → Gemini web grounding → static fallback
-    enriched            = industry_benchmark.enrich_with_gemini(s["industry"], s["company"], org_use_cases)
+    # Agent 5: Tavily search ? Gemini web grounding ? static fallback
+    # Reuse the phase-0 prefetch only when there are no organisation use cases yet.
+    if prefetched and not org_use_cases:
+        enriched = prefetched
+    else:
+        enriched = industry_benchmark.enrich_with_gemini(s["industry"], s["company"], org_use_cases)
     validated_use_cases = industry_benchmark.cross_reference_org_use_cases(raw_use_cases, s["industry"])
 
     # Normalise adoption_rate to int (new agent already does this, belt+braces)

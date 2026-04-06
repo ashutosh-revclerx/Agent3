@@ -1,5 +1,4 @@
 import { useState, useEffect, useRef } from 'react'
-import './phases.css'
 
 export default function Phase6_GlobalAdoptionInsight({
   api,

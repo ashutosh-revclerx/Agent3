@@ -1,5 +1,4 @@
 import { useState, useEffect, useRef } from 'react'
-import './phases.css'
 
 const IMPACT_COLOR  = { High: 'var(--green)', Medium: 'var(--amber)', Low: 'var(--text-3)' }
 const EFFORT_COLOR  = { Low: 'var(--green)',  Medium: 'var(--amber)', High: 'var(--red)' }

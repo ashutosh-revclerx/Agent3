@@ -86,6 +86,80 @@ def get_waiting_message(phase: str, submitted: int, total: int) -> str:
         f"Waiting for {remaining} more response{'s' if remaining > 1 else ''}..."
     )
 
+def get_company_goals_checkup(company: str, existing_objectives: list = None) -> str:
+    """
+    LLM-generated question to cross-check company's stated strategic goals.
+    Phase 1 survey question, persisted to phase_data.company_goals_validated
+    """
+    from gemini_client import gemini_text
+    
+    objectives_str = " ".join(existing_objectives) if existing_objectives else "strategic growth"
+    
+    prompt = (
+        f"You are an AI strategy consultant speaking to {company}'s leadership.\n"
+        f"They have stated these goals: {objectives_str}\n"
+        f"Ask ONE short, probing question (under 20 words) to validate these goals "
+        f"and uncover any conflicting priorities or unstated constraints.\n"
+        f"Return only the question, no preamble."
+    )
+    result = gemini_text(prompt)
+    return result if result else f"How do these goals align with your current operational priorities at {company}?"
+
+
+def get_company_ai_maturity_question(company: str, industry: str) -> str:
+    """
+    LLM-generated question to assess company's AI maturity level.
+    Phase 1 survey question, persisted to phase_data.company_ai_maturity
+    """
+    from gemini_client import gemini_text
+    
+    prompt = (
+        f"You are assessing {company}'s (industry: {industry}) AI readiness.\n"
+        f"Generate ONE concise question (under 20 words) that reveals their current AI maturity: "
+        f"Are they pre-AI, early-stage pilots, or scaling existing AI?\n"
+        f"Make it conversational and non-threatening.\n"
+        f"Return only the question, no preamble."
+    )
+    result = gemini_text(prompt)
+    return result if result else f"What's your experience with AI tools and projects so far at {company}?"
+
+
+def get_it_landscape_question(company: str) -> str:
+    """
+    LLM-generated question to understand IT infrastructure and tool stack.
+    Phase 1 survey question, persisted to phase_data.it_tools
+    """
+    from gemini_client import gemini_text
+    
+    prompt = (
+        f"You are a technical discovery consultant at {company}.\n"
+        f"Ask ONE specific question (under 20 words) about their IT landscape and current tool stack "
+        f"(databases, cloud platforms, legacy systems, or data workflow).\n"
+        f"Make it natural and non-technical for mixed audiences.\n"
+        f"Return only the question, no preamble."
+    )
+    result = gemini_text(prompt)
+    return result if result else f"What are the main systems and platforms your team relies on day-to-day?"
+
+
+def get_success_definition_prompt(name: str, role: str, company: str) -> str:
+    """
+    LLM-generated question for participant's personal definition of success.
+    Phase 1 upgrade, persisted to phase_data.participant_success_definition
+    """
+    from gemini_client import gemini_text
+    
+    prompt = (
+        f"You are 1-on-1 with {name}, a {role} at {company}.\n"
+        f"Ask ONE open, motivating question (under 25 words) about what personal success "
+        f"would look like for them after this workshop — in terms of skills, confidence, or impact.\n"
+        f"Make it feel empowering, not corporate.\n"
+        f"Return only the question, no preamble."
+    )
+    result = gemini_text(prompt)
+    return result if result else f"What would success look like for you personally after this AI workshop, {name}?"
+
+
 def process_onboarding_chat(messages, name: str, role: str, department: str) -> dict:
     """
     Handles the interactive voice interview during onboarding.
@@ -193,4 +267,4 @@ Output ONLY valid JSON:
                 "top_challenge": user_msgs[-1] if len(user_msgs) > 1 else ""
             }
     
-    return res
+    return res
