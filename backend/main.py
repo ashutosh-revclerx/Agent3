@@ -23,6 +23,7 @@ from contextlib import asynccontextmanager
 from pydantic import BaseModel, Field
 from typing import Optional, List
 import httpx
+from urllib.parse import quote
 from env_loader import load_env
 
 load_env()
@@ -200,6 +201,7 @@ class LiveAvatarEmbedRequest(BaseModel):
     session_code: Optional[str] = None
     participant_name: Optional[str] = None
     participant_role: Optional[str] = None
+    linkedin_url: Optional[str] = None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -235,53 +237,131 @@ async def create_liveavatar_embed(req: LiveAvatarEmbedRequest):
     api_key = os.getenv("LIVEAVATAR_API_KEY", "").strip()
     avatar_id = os.getenv("LIVEAVATAR_AVATAR_ID", "").strip()
     context_id = os.getenv("LIVEAVATAR_CONTEXT_ID", "").strip()
+    voice_id = os.getenv("LIVEAVATAR_VOICE_ID", "").strip()
+    language = os.getenv("LIVEAVATAR_LANGUAGE", "en").strip() or "en"
     sandbox = os.getenv("LIVEAVATAR_SANDBOX", "true").strip().lower() in {"1", "true", "yes", "on"}
 
-    if not api_key or not avatar_id or not context_id:
+    if not api_key or not avatar_id:
         raise HTTPException(
             503,
-            "LiveAvatar is not configured. Set LIVEAVATAR_API_KEY, LIVEAVATAR_AVATAR_ID, and LIVEAVATAR_CONTEXT_ID.",
+            "LiveAvatar is not configured. Set LIVEAVATAR_API_KEY and LIVEAVATAR_AVATAR_ID in backend/.env.",
         )
 
-    payload = {
-        "avatar_id": avatar_id,
-        "context_id": context_id,
-        "is_sandbox": sandbox,
-    }
+    if not context_id:
+        raise HTTPException(
+            503,
+            "LiveAvatar is not configured. Set LIVEAVATAR_CONTEXT_ID in backend/.env to your pre-created context.",
+        )
+
+    if not voice_id:
+        raise HTTPException(
+            503,
+            "LiveAvatar is not configured. Set LIVEAVATAR_VOICE_ID in backend/.env to the avatar voice to use.",
+        )
+
+    from gemini_client import gemini_text
+
+    prompt_name = (req.participant_name or "there").strip() or "there"
+    prompt_role = (req.participant_role or "participant").strip() or "participant"
+    linkedin_url = (req.linkedin_url or "").strip()
+    greeting_prompt = (
+        f"Write one short spoken opening line for a LiveAvatar onboarding assistant.\n"
+        f"Participant name: {prompt_name}\n"
+        f"Participant role: {prompt_role}\n"
+        f"LinkedIn URL: {linkedin_url or 'not provided'}\n\n"
+        f"Requirements:\n"
+        f"- Warm, professional, and concise.\n"
+        f"- Ask one first onboarding question after the greeting.\n"
+        f"- Keep it to 1-2 sentences.\n"
+        f"- Return only the line to be spoken."
+    )
+    opening_text = gemini_text(greeting_prompt) or (
+        f"Hi {prompt_name}, welcome. I'm your onboarding avatar. What's the main challenge you'd like help with today?"
+    )
 
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
-            resp = await client.post(
-                "https://api.liveavatar.com/v2/embeddings",
+            token_resp = await client.post(
+                "https://api.liveavatar.com/v1/sessions/token",
                 headers={
                     "X-API-KEY": api_key,
                     "Content-Type": "application/json",
+                    "Accept": "application/json",
                 },
-                json=payload,
+                json={
+                    "mode": "FULL",
+                    "avatar_id": avatar_id,
+                    "is_sandbox": sandbox,
+                    "avatar_persona": {
+                        "voice_id": voice_id,
+                        "context_id": context_id,
+                        "language": language,
+                    },
+                },
             )
     except httpx.HTTPError as exc:
-        logger.error("LiveAvatar embed request failed: %s", exc)
-        raise HTTPException(502, "Could not reach LiveAvatar right now.")
+        logger.error("LiveAvatar token request failed: %s", exc)
+        raise HTTPException(502, "Could not create a LiveAvatar session token right now.")
 
-    if resp.status_code >= 400:
-        logger.error("LiveAvatar embed error %s: %s", resp.status_code, resp.text)
-        raise HTTPException(502, f"LiveAvatar embed error: {resp.status_code}")
+    if token_resp.status_code >= 400:
+        logger.error("LiveAvatar token error %s: %s", token_resp.status_code, token_resp.text)
+        raise HTTPException(502, f"LiveAvatar token error: {token_resp.status_code}")
 
-    data = resp.json()
-    embed_url = (
-        data.get("url")
-        or data.get("embed_url")
-        or data.get("data", {}).get("url")
-        or data.get("data", {}).get("embed_url")
+    token_data = token_resp.json()
+    session_id = (
+        token_data.get("session_id")
+        or token_data.get("data", {}).get("session_id")
     )
-    if not embed_url:
-        logger.error("LiveAvatar embed response missing URL: %s", data)
-        raise HTTPException(502, "LiveAvatar did not return an embed URL.")
+    session_token = (
+        token_data.get("session_token")
+        or token_data.get("data", {}).get("session_token")
+    )
+    if not session_id or not session_token:
+        logger.error("LiveAvatar token response missing session info: %s", token_data)
+        raise HTTPException(502, "LiveAvatar did not return a session token.")
+
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            start_resp = await client.post(
+                "https://api.liveavatar.com/v1/sessions/start",
+                headers={
+                    "Accept": "application/json",
+                    "Authorization": f"Bearer {session_token}",
+                },
+            )
+    except httpx.HTTPError as exc:
+        logger.error("LiveAvatar session start failed: %s", exc)
+        raise HTTPException(502, "Could not start the LiveAvatar session right now.")
+
+    if start_resp.status_code >= 400:
+        logger.error("LiveAvatar start error %s: %s", start_resp.status_code, start_resp.text)
+        raise HTTPException(502, f"LiveAvatar start error: {start_resp.status_code}")
+
+    start_data = start_resp.json()
+    start_data = start_data.get("data", start_data)
+    livekit_url = start_data.get("livekit_url")
+    livekit_token = start_data.get("livekit_client_token") or start_data.get("livekit_token")
+    if not livekit_url or not livekit_token:
+        logger.error("LiveAvatar start response missing room info: %s", start_data)
+        raise HTTPException(502, "LiveAvatar did not return LiveKit room credentials.")
+
+    embed_url = (
+        f"https://meet.livekit.io/custom?liveKitUrl={quote(livekit_url, safe='')}"
+        f"&token={quote(livekit_token, safe='')}"
+    )
 
     return {
         "embed_url": embed_url,
+        "livekit_url": livekit_url,
+        "livekit_token": livekit_token,
+        "session_id": session_id,
+        "session_token": session_token,
         "sandbox": sandbox,
         "avatar_id": avatar_id,
+        "context_id": context_id,
+        "voice_id": voice_id,
+        "language": language,
+        "opening_text": opening_text,
     }
 
 

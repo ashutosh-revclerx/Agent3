@@ -1,8 +1,5 @@
 import VoiceTextInput from './Voicetextinput'
-import AgentChat from './Agentchat'
-import { useState, useEffect, useRef } from 'react'
-
-// ─────────────────────────────────────────────────────────────────────────────
+import { useState, useEffect, useRef } from 'react'// ─────────────────────────────────────────────────────────────────────────────
 // ROLE-BASED QUESTION SETS
 // Each role gets tailored objectives, growth options, and a challenge prompt
 // ─────────────────────────────────────────────────────────────────────────────
@@ -305,7 +302,6 @@ export default function Phase2_Context({ api, apiBase, getWsBase, session, parti
   const [step,        setStep]        = useState('objectives')
   const [objectives,  setObjectives]  = useState([])
   const [growthAreas, setGrowthAreas] = useState([])
-  const [challenges,  setChallenges]  = useState('')
   const [submitting,       setSubmitting]       = useState(false)
   const [error,            setError]            = useState(null)
   const [insights,         setInsights]         = useState(null)
@@ -353,10 +349,14 @@ export default function Phase2_Context({ api, apiBase, getWsBase, session, parti
   // WebSocket
   useEffect(() => {
     if (!session?.code) return
+    let disposed = false
     const ws = new WebSocket(
       `${getWsBase()}/ws/${session.code}?participant_id=${participant?.id || 'host'}`
     )
     wsRef.current = ws
+    ws.onopen = () => {
+      if (disposed) ws.close()
+    }
     ws.onmessage = (e) => {
       try {
         const msg = JSON.parse(e.data)
@@ -365,7 +365,12 @@ export default function Phase2_Context({ api, apiBase, getWsBase, session, parti
       } catch {}
     }
     ws.onerror = () => {}
-    return () => ws.close()
+    return () => {
+      disposed = true
+      if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CLOSING) {
+        ws.close()
+      }
+    }
   }, [session?.code])
 
   const toggleObjective = (id) =>
@@ -379,8 +384,7 @@ export default function Phase2_Context({ api, apiBase, getWsBase, session, parti
 
   const canSubmit =
     objectives.length > 0 &&
-    growthAreas.length > 0 &&
-    challenges.trim().length > 20
+    growthAreas.length > 0
 
   const handleSubmit = async () => {
     if (!session?.code) {
@@ -401,7 +405,7 @@ export default function Phase2_Context({ api, apiBase, getWsBase, session, parti
             return found ? found.label : id
           }),
           growth_areas: growthAreas,
-          challenges:      challenges.trim(),
+          challenges:      participant?.top_challenge || participant?.challenges || '',
         }),
       })
       setInsights(result.objective_map)
@@ -413,7 +417,7 @@ export default function Phase2_Context({ api, apiBase, getWsBase, session, parti
     }
   }
 
-  const steps  = ['objectives', 'growth', 'challenges', 'insights']
+  const steps  = ['objectives', 'growth', 'insights']
   const stepIdx = steps.indexOf(step)
 
   return (
@@ -443,7 +447,7 @@ export default function Phase2_Context({ api, apiBase, getWsBase, session, parti
       </div>
 
       <div className="step-track">
-        {['Objectives', 'Growth', 'Challenges', 'Insights'].map((s, i) => (
+        {['Objectives', 'Growth', 'Insights'].map((s, i) => (
           <div key={s} className={`step-item ${i <= stepIdx ? 'active' : ''} ${i < stepIdx ? 'done' : ''}`}>
             <div className="step-dot">{i < stepIdx ? '✓' : i + 1}</div>
             <span className="step-name">{s}</span>
@@ -462,7 +466,7 @@ export default function Phase2_Context({ api, apiBase, getWsBase, session, parti
         {step === 'objectives' && (
           <div className="fade-up">
             <div className="phase-title-block">
-              <p className="badge badge-accent">Step 1 of 3</p>
+              <p className="badge badge-accent">Step 1 of 2</p>
               <h2 className="phase-title">{config.objectiveTitle}</h2>
               <p className="phase-desc">{config.objectiveDesc}</p>
             </div>
@@ -523,7 +527,7 @@ export default function Phase2_Context({ api, apiBase, getWsBase, session, parti
         {step === 'growth' && (
           <div className="fade-up">
             <div className="phase-title-block">
-              <p className="badge badge-accent">Step 2 of 3</p>
+              <p className="badge badge-accent">Step 2 of 2</p>
               <h2 className="phase-title">{config.growthTitle}</h2>
               <p className="phase-desc">Choose the initiatives you are most focused on this year.</p>
             </div>
@@ -576,64 +580,7 @@ export default function Phase2_Context({ api, apiBase, getWsBase, session, parti
           </div>
         )}
 
-        {/* ── STEP 3: Challenges ── */}
-        {step === 'challenges' && (
-          <div className="fade-up">
-            <div className="phase-title-block">
-              <p className="badge badge-accent">Step 3 of 3</p>
-              <h2 className="phase-title">Challenges that you face</h2>
-              {/* <p className="phase-desc">The agent will ask you a tailored question based on your {role} role. Answer in your own words.</p> */}
-            </div>
-
-            <div className="phase-form">
-              <AgentChat
-                key={role}
-                questions={[{
-                  id: 'challenge',
-                  question: config.challengePrompt,
-                  hint: config.challengeHint,
-                  placeholder: 'Describe it in your own words — the more specific, the better.',
-                  field: 'challenges',
-                  required: true,
-                }]}
-                agentName="Insight Mining Agent"
-                agentAvatar="◈"
-                apiBase={apiBase}
-                onComplete={(answers) => setChallenges(answers.challenges || '')}
-              />
-
-              {/* Summary of selections */}
-              <div className="summary-card">
-                <p className="summary-title">Your selections</p>
-                <div className="summary-chips">
-                  {objectives.map(id => {
-                    const o = allObjectives.find(x => x.id === id)
-                    if (!o) return null
-                    return (
-                      <span key={id} className={`chip${o.custom ? ' chip-custom' : ''}`}>
-                        {o.icon} {o.label}
-                        {o.custom && <span style={{ fontSize: 9, marginLeft: 4, opacity: 0.7 }}>custom</span>}
-                      </span>
-                    )
-                  })}
-                </div>
-                <div className="summary-chips" style={{ marginTop: 8 }}>
-                  {growthAreas.map(g => {
-                    const isCustom = customGrowths.includes(g)
-                    return (
-                      <span key={g} className={`chip chip-green${isCustom ? ' chip-custom' : ''}`}>
-                        {g}
-                        {isCustom && <span style={{ fontSize: 9, marginLeft: 4, opacity: 0.7 }}>custom</span>}
-                      </span>
-                    )
-                  })}
-                </div>
-              </div>
-
-              {error && <div className="error-banner">⚠ {error}</div>}
-            </div>
-          </div>
-        )}
+        {/* ── STEP 3: Challenges (Handled by Phase 1 LiveAvatar) ── */}
 
         {/* ── STEP 4: AI Insights ── */}
         {step === 'insights' && insights && (
@@ -710,15 +657,6 @@ export default function Phase2_Context({ api, apiBase, getWsBase, session, parti
           </>
         )}
         {step === 'growth' && (
-          <button
-            className="btn btn-primary"
-            disabled={growthAreas.length === 0}
-            onClick={() => setStep('challenges')}
-          >
-            Continue →
-          </button>
-        )}
-        {step === 'challenges' && (
           <button
             className="btn btn-primary"
             disabled={!canSubmit || submitting}

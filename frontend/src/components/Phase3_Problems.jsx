@@ -36,10 +36,14 @@ export default function Phase3_Problems({ api, getWsBase, session, participant, 
   // WebSocket
   useEffect(() => {
     if (!session?.code) return
+    let disposed = false
     const ws = new WebSocket(
       `${getWsBase()}/ws/${session.code}?participant_id=${participant?.id || 'host'}`
     )
     wsRef.current = ws
+    ws.onopen = () => {
+      if (disposed) ws.close()
+    }
     ws.onmessage = (e) => {
       try {
         const msg = JSON.parse(e.data)
@@ -49,7 +53,12 @@ export default function Phase3_Problems({ api, getWsBase, session, participant, 
       } catch {}
     }
     ws.onerror = () => {}
-    return () => ws.close()
+    return () => {
+      disposed = true
+      if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CLOSING) {
+        ws.close()
+      }
+    }
   }, [session?.code])
 
   const updateProblem = (id, key, val) =>

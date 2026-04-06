@@ -1,17 +1,19 @@
 import { useEffect, useMemo, useState } from 'react'
 
-export default function LiveAvatarEmbed({ api, sessionCode, participantName, participantRole }) {
+export default function LiveAvatarEmbed({ api, sessionCode, participantName, participantRole, participantLinkedinUrl }) {
   const [embedUrl, setEmbedUrl] = useState('')
+  const [openingText, setOpeningText] = useState('')
   const [status, setStatus] = useState('idle')
   const [error, setError] = useState('')
 
   const ready = useMemo(() => {
-    return Boolean(sessionCode?.trim() && participantRole?.trim())
-  }, [sessionCode, participantRole])
+    return Boolean(sessionCode?.trim() && participantRole?.trim() && participantLinkedinUrl?.trim())
+  }, [sessionCode, participantRole, participantLinkedinUrl])
 
   useEffect(() => {
     if (!ready) {
       setEmbedUrl('')
+      setOpeningText('')
       setStatus('idle')
       setError('')
       return
@@ -28,15 +30,18 @@ export default function LiveAvatarEmbed({ api, sessionCode, participantName, par
             session_code: sessionCode,
             participant_name: participantName,
             participant_role: participantRole,
+            linkedin_url: participantLinkedinUrl,
           }),
         })
         if (!cancelled) {
           setEmbedUrl(data.embed_url)
+          setOpeningText(data.opening_text || '')
           setStatus('ready')
         }
       } catch (err) {
         if (!cancelled) {
           setStatus('error')
+          setOpeningText('')
           setError(err.message || 'Could not start the live avatar session.')
         }
       }
@@ -46,7 +51,7 @@ export default function LiveAvatarEmbed({ api, sessionCode, participantName, par
     return () => {
       cancelled = true
     }
-  }, [api, ready, sessionCode, participantName, participantRole])
+  }, [api, ready, sessionCode, participantName, participantRole, participantLinkedinUrl])
 
   return (
     <div className="live-avatar-panel fade-up">
@@ -63,7 +68,13 @@ export default function LiveAvatarEmbed({ api, sessionCode, participantName, par
       {status === 'loading' && (
         <div className="live-avatar-state">
           <div className="spinner" />
-          <span>Creating a live avatar session...</span>
+          <span>Creating your greeting session...</span>
+        </div>
+      )}
+
+      {openingText && (
+        <div className="live-avatar-help" style={{ marginBottom: 12 }}>
+          <strong>Avatar opening line:</strong> {openingText}
         </div>
       )}
 
@@ -84,9 +95,15 @@ export default function LiveAvatarEmbed({ api, sessionCode, participantName, par
         </div>
       )}
 
-      {status !== 'ready' && status !== 'error' && (
+      {status !== 'ready' && status !== 'error' && !participantLinkedinUrl?.trim() && (
         <p className="live-avatar-help">
-          The live avatar will appear once the participant role is ready.
+          Add your LinkedIn URL to unlock the avatar step.
+        </p>
+      )}
+
+      {status !== 'ready' && status !== 'error' && participantLinkedinUrl?.trim() && (
+        <p className="live-avatar-help">
+          The avatar is preparing your greeting now.
         </p>
       )}
     </div>

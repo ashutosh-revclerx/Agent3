@@ -35,10 +35,14 @@ export default function Phase5_Poll1({
   // ── WebSocket for live poll updates ────────────────────────────────────
   useEffect(() => {
     if (!session?.code) return
+    let disposed = false
     const ws = new WebSocket(
       `${getWsBase()}/ws/${session.code}?participant_id=${participant?.id || 'host'}`
     )
     wsRef.current = ws
+    ws.onopen = () => {
+      if (disposed) ws.close()
+    }
 
     ws.onmessage = (e) => {
       try {
@@ -57,7 +61,12 @@ export default function Phase5_Poll1({
       } catch {}
     }
 
-    return () => ws.close()
+    return () => {
+      disposed = true
+      if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CLOSING) {
+        ws.close()
+      }
+    }
   }, [session?.code, participant?.id, voted])
 
   // ── Toggle vote ────────────────────────────────────────────────────────

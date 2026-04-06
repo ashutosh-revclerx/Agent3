@@ -17,10 +17,7 @@ export default function Phase1_Onboarding({ api, getWsBase, session, role, onCom
   const [name, setName] = useState(role === 'host' ? (session?.host_name || '') : '')
   const [selectedRole, setSelectedRole] = useState('')
   const [customRole, setCustomRole] = useState('')
-  const [department, setDepartment] = useState('')
   const [linkedinUrl, setLinkedinUrl] = useState('')
-  const [topChallenge, setTopChallenge] = useState('')
-  const [conversation, setConversation] = useState([])
 
   const [dna, setDna] = useState(null)
   const [profile, setProfile] = useState(null)
@@ -29,10 +26,14 @@ export default function Phase1_Onboarding({ api, getWsBase, session, role, onCom
 
   useEffect(() => {
     if (!sessionCode || !getWsBase) return
+    let disposed = false
     const ws = new WebSocket(
       `${getWsBase()}/ws/${sessionCode}?participant_id=${role === 'host' ? 'host' : 'joining'}`
     )
     wsRef.current = ws
+    ws.onopen = () => {
+      if (disposed) ws.close()
+    }
 
     ws.onmessage = (e) => {
       try {
@@ -50,12 +51,17 @@ export default function Phase1_Onboarding({ api, getWsBase, session, role, onCom
       }
     }
 
-    return () => ws.close()
+    return () => {
+      disposed = true
+      if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CLOSING) {
+        ws.close()
+      }
+    }
   }, [sessionCode, getWsBase, role, session?.participant_id])
 
   const activeRole = selectedRole === 'Other' ? (customRole.trim() || 'Other') : selectedRole
-  const onboardingReady = Boolean(department.trim() && topChallenge.trim())
-  const isFormValid = Boolean(name.trim() && activeRole && onboardingReady)
+  const isFormValid = Boolean(name.trim() && activeRole && linkedinUrl.trim())
+  const avatarReady = Boolean(activeRole && linkedinUrl.trim())
 
   const handleCodeSubmit = async () => {
     if (!sessionCode.trim()) return
@@ -74,12 +80,6 @@ export default function Phase1_Onboarding({ api, getWsBase, session, role, onCom
     }
   }
 
-  const resetAvatarFlow = () => {
-    setDepartment('')
-    setTopChallenge('')
-    setConversation([])
-  }
-
   const handleJoin = async () => {
     if (!isFormValid) return
     setLoading(true)
@@ -94,10 +94,10 @@ export default function Phase1_Onboarding({ api, getWsBase, session, role, onCom
           session_code: activeSession.code,
           name,
           role: activeRole,
-          department,
-          top_challenge: topChallenge,
+          department: activeRole,
+          top_challenge: `LinkedIn provided for ${activeRole}`,
           ai_confidence: 3,
-          conversation: conversation.map((m) => ({ role: m.type === 'user' ? 'user' : 'agent', text: m.text })),
+          conversation: [],
           linkedin_url: linkedinUrl,
         }),
       })
@@ -234,7 +234,7 @@ export default function Phase1_Onboarding({ api, getWsBase, session, role, onCom
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
                   <div className="input-group">
                     <label className="input-label">Your role</label>
-                    <select className="input" value={selectedRole} onChange={e => { setSelectedRole(e.target.value); resetAvatarFlow() }}>
+                    <select className="input" value={selectedRole} onChange={e => setSelectedRole(e.target.value)}>
                       <option value="">Select role...</option>
                       {ROLES.map(r => <option key={r} value={r}>{r}</option>)}
                     </select>
@@ -242,7 +242,7 @@ export default function Phase1_Onboarding({ api, getWsBase, session, role, onCom
                   {selectedRole === 'Other' && (
                     <div className="input-group fade-in">
                       <label className="input-label">Custom Role Name</label>
-                      <input className="input" placeholder="e.g. Sales Manager" value={customRole} onChange={e => { setCustomRole(e.target.value); resetAvatarFlow() }} autoFocus />
+                      <input className="input" placeholder="e.g. Sales Manager" value={customRole} onChange={e => setCustomRole(e.target.value)} autoFocus />
                     </div>
                   )}
                   <div className="input-group">
@@ -251,10 +251,19 @@ export default function Phase1_Onboarding({ api, getWsBase, session, role, onCom
                   </div>
                 </div>
 
-                {activeRole && (
+                {activeRole && !avatarReady && (
+                  <div className="input-group">
+                    <label className="input-label">Next window: avatar guide</label>
+                    <div className="live-avatar-help">
+                      Add your LinkedIn URL and the avatar will open in the next step with the first question.
+                    </div>
+                  </div>
+                )}
+
+                {avatarReady && (
                   <div className="input-group">
                     <label className="input-label">
-                      Continue with the avatar guide
+                      Next window: avatar guide
                       <span style={{ marginLeft: 6, fontSize: 10, color: 'var(--accent)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>HeyGen Live</span>
                     </label>
                     <AvatarGuidedOnboarding
@@ -262,11 +271,7 @@ export default function Phase1_Onboarding({ api, getWsBase, session, role, onCom
                       sessionCode={resolvedSession?.code || sessionCode}
                       name={name}
                       role={activeRole}
-                      department={department}
-                      topChallenge={topChallenge}
-                      onDepartmentChange={setDepartment}
-                      onChallengeChange={setTopChallenge}
-                      onConversationChange={setConversation}
+                      linkedinUrl={linkedinUrl}
                     />
                   </div>
                 )}

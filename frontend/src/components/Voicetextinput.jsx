@@ -14,6 +14,7 @@ import { useState, useRef, useEffect } from 'react'
  *   hint           string   — small hint below field
  *   aiQuestion     string   — if set, plays via ElevenLabs on mount
  *   onAudioEnd     fn       — called when AI audio finishes playing
+ *   onRecordingStop fn      — called with the final text when the mic stops
  *   cleanWithAI    bool     — whether to clean messy transcripts via Gemini
  *   apiBase        string   — backend URL for /ai/speak and /ai/clean
  *   disabled       bool
@@ -33,6 +34,7 @@ export default function VoiceTextInput({
   hint,
   aiQuestion,
   onAudioEnd,
+  onRecordingStop,
   cleanWithAI = true,
   apiBase = '',
   disabled = false,
@@ -202,13 +204,16 @@ export default function VoiceTextInput({
       recognitionRef.current = null
     }
     setMicState(MIC_STATES.processing)
-    setLiveTranscript('')
 
     // Optional: clean transcript with Gemini
     const currentValue = valueRef.current || value;
+    if (onRecordingStop) {
+      onRecordingStop(currentValue.trim())
+    }
     if (cleanWithAI && currentValue.trim().length > 40 && apiBase) {
       cleanTranscript(currentValue)
     } else {
+      setLiveTranscript('')
       setMicState(MIC_STATES.idle)
     }
   }
