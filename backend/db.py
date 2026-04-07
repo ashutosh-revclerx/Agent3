@@ -76,23 +76,53 @@ async def create_session(
     host_name: str,
     company: str,
     industry: str,
+    participant_count: int = 0,
+    duration_mins: int = 90,
+    avatar_id: Optional[str] = None,
+    voice_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Create a new session in the database."""
     session_id = str(uuid.uuid4())
 
     async with get_connection() as conn:
-        await conn.execute(
-            """
-            INSERT INTO sessions (id, code, host_name, company, industry, status)
-            VALUES ($1, $2, $3, $4, $5, 'waiting')
-            """,
-            session_id,
-            code,
-            host_name,
-            company,
-            industry,
-        )
-        logger.info("Session created: %s (%s)", code, session_id)
+        try:
+            await conn.execute(
+                """
+                INSERT INTO sessions (
+                    id, code, host_name, company, industry,
+                    participant_count, duration_mins, current_phase, status,
+                    avatar_id, voice_id
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, 0, 'waiting', $8, $9)
+                """,
+                session_id,
+                code,
+                host_name,
+                company,
+                industry,
+                participant_count,
+                duration_mins,
+                avatar_id,
+                voice_id,
+            )
+        except asyncpg.UndefinedColumnError:
+            # Backward compatibility for lean schema where these columns were removed.
+            await conn.execute(
+                """
+                INSERT INTO sessions (
+                    id, code, host_name, company, industry, current_phase, status, avatar_id, voice_id
+                )
+                VALUES ($1, $2, $3, $4, $5, 0, 'waiting', $6, $7)
+                """,
+                session_id,
+                code,
+                host_name,
+                company,
+                industry,
+                avatar_id,
+                voice_id,
+            )
+        logger.info("Session created: %s (%s) | avatar=%s voice=%s", code, session_id, avatar_id, voice_id)
 
     return {"id": session_id, "code": code}
 

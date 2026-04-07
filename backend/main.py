@@ -16,13 +16,14 @@ Multi-Agent Architecture:
 Database: PostgreSQL (async via asyncpg)
 Redis: Deferred to later stages
 """
-import uuid, random, string, datetime, json, asyncio, os, logging
+import uuid, random, string, datetime, json, asyncio, os, logging, base64
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from pydantic import BaseModel, Field
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 import httpx
+import websockets
 from urllib.parse import quote
 from env_loader import load_env
 
@@ -30,6 +31,7 @@ load_env()
 
 # ── Database and agents ────────────────────────────────────────────────────────
 import db
+import redis_client
 from agents import facilitator
 from agents import insight_mining
 from agents import prompt_coaching
@@ -39,6 +41,7 @@ from agents import prioritisation_roi
 from agents import deck_builder
 from agents import opportunity_generation
 from agents import scraping_agent
+from agents import survey_agent
 from seed_context import seed_session, build_system_prompt, get_department_names, BUSINESS_CONTEXT
 from schemas import CompanyDNA, ParticipantProfile
 
@@ -50,8 +53,12 @@ async def lifespan(app: FastAPI):
     # Startup
     await db.init_db()
     logger.info("✅ Database connection pool initialized")
+    await redis_client.init_redis()
+    logger.info("✅ Redis client initialized")
     yield
     # Shutdown
+    await redis_client.close_redis()
+    logger.info("✅ Redis client closed")
     await db.close_db()
     logger.info("✅ Database connection pool closed")
 
@@ -79,6 +86,8 @@ sessions:      dict = {}   # code → session context (used for agent logic, per
 participants:  dict = {}   # id   → participant context (used for agent logic, persisted to DB)
 phase_data:    dict = {}   # code → { phase_key: [submissions] } (queried from DB)
 ws_connections:dict = {}   # code → [WebSocket] (real-time broadcasts)
+liveavatar_runtime: dict = {}  # session_id -> {websocket_url, agent_token, voice_id, mode}
+liveavatar_speak_locks: dict = {}  # session_id -> asyncio.Lock for serialized audio pushes
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -86,6 +95,319 @@ ws_connections:dict = {}   # code → [WebSocket] (real-time broadcasts)
 # ─────────────────────────────────────────────────────────────────────────────
 def generate_code(n=6) -> str:
     return ''.join(random.choices(string.ascii_uppercase + string.digits, k=n))
+
+def normalize_uuid(value: Optional[str]) -> Optional[str]:
+    """Return canonical UUID string when valid; otherwise None."""
+    if not value:
+        return None
+    raw = value.strip()
+    if not raw:
+        return None
+    try:
+        return str(uuid.UUID(raw))
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+def upstream_error_text(resp: httpx.Response, max_len: int = 2000) -> str:
+    """Return a compact upstream error payload safe for logs/client diagnostics."""
+    text = (resp.text or "").strip()
+    if not text:
+        return "<empty body>"
+    if len(text) > max_len:
+        return f"{text[:max_len]}... [truncated]"
+    return text
+
+async def synthesize_pcm_24khz(text: str, voice_id: str, model_id: str = "eleven_turbo_v2") -> bytes:
+    """Synthesize speech as raw PCM 16-bit 24kHz bytes via ElevenLabs."""
+    api_key = os.getenv("ELEVENLABS_API_KEY", "").strip()
+    if not api_key:
+        raise HTTPException(503, "ELEVENLABS_API_KEY not set — cannot synthesize avatar speech.")
+
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream?output_format=pcm_24000"
+    headers = {
+        "xi-api-key": api_key,
+        "Content-Type": "application/json",
+        "Accept": "audio/pcm",
+    }
+    payload = {
+        "text": text[:1500],
+        "model_id": model_id,
+        "voice_settings": {
+            "stability": 0.5,
+            "similarity_boost": 0.75,
+        },
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(url, headers=headers, json=payload)
+    except httpx.HTTPError as exc:
+        logger.error("ElevenLabs PCM request failed: %s", exc)
+        raise HTTPException(502, "Could not synthesize avatar speech right now.")
+
+    if resp.status_code >= 400:
+        details = upstream_error_text(resp)
+        logger.error("ElevenLabs PCM error %s: %s", resp.status_code, details)
+        raise HTTPException(502, f"ElevenLabs speech error {resp.status_code}: {details}")
+
+    content_type = (resp.headers.get("content-type", "") or "").lower()
+    if "audio/pcm" not in content_type:
+        logger.error("ElevenLabs returned non-PCM audio: content-type=%s", content_type or "<missing>")
+        raise HTTPException(
+            502,
+            f"ElevenLabs returned '{content_type or 'unknown'}' instead of audio/pcm.",
+        )
+
+    audio_bytes = resp.content or b""
+    if len(audio_bytes) < 512:
+        raise HTTPException(502, "ElevenLabs returned empty PCM audio.")
+    return audio_bytes
+
+async def send_pcm_to_liveavatar_ws(
+    websocket_url: str,
+    agent_token: Optional[str],
+    pcm_audio: bytes,
+    event_id: str,
+) -> None:
+    """Push PCM chunks into LiveAvatar LITE websocket via agent.speak events."""
+    headers = {}
+    if agent_token:
+        headers["Authorization"] = f"Bearer {agent_token}"
+
+    async with websockets.connect(
+        websocket_url,
+        additional_headers=headers,
+        ping_interval=20,
+        ping_timeout=20,
+        close_timeout=5,
+        max_size=2_000_000,
+    ) as ws:
+        # Wait briefly for connected state; proceed anyway if no state event is emitted.
+        try:
+            for _ in range(5):
+                raw = await asyncio.wait_for(ws.recv(), timeout=2.0)
+                msg = json.loads(raw) if isinstance(raw, str) else {}
+                if msg.get("type") == "session.state_updated" and msg.get("state") == "connected":
+                    break
+        except Exception:
+            pass
+
+        chunk_size = 9_600  # ~200ms @ 24kHz 16-bit mono (smoother realtime delivery)
+        for i in range(0, len(pcm_audio), chunk_size):
+            chunk = pcm_audio[i:i + chunk_size]
+            payload = {
+                "type": "agent.speak",
+                "event_id": event_id,
+                "audio": base64.b64encode(chunk).decode("ascii"),
+            }
+            await ws.send(json.dumps(payload))
+
+        await ws.send(json.dumps({"type": "agent.speak_end", "event_id": event_id}))
+
+async def push_text_to_liveavatar(
+    session_id: str,
+    text: str,
+    voice_id: Optional[str] = None,
+    model_id: str = "eleven_turbo_v2",
+) -> str:
+    runtime = liveavatar_runtime.get(session_id)
+    if not runtime:
+        raise HTTPException(404, "LiveAvatar session runtime not found. Start /liveavatar/embed first.")
+    if runtime.get("mode") != "LITE":
+        raise HTTPException(400, "liveavatar/speak is only supported for LITE mode sessions.")
+    if not text.strip():
+        raise HTTPException(400, "text is required")
+
+    selected_voice = (
+        voice_id
+        or os.getenv("ELEVENLABS_VOICE_ID", "").strip()
+        or runtime.get("voice_id")
+        or "EXAVITQu4vr4xnSDxMaL"
+    )
+    pcm_audio = await synthesize_pcm_24khz(text.strip(), selected_voice, model_id=model_id)
+    event_id = str(uuid.uuid4())
+    lock = liveavatar_speak_locks.setdefault(session_id, asyncio.Lock())
+    async with lock:
+        last_exc = None
+        for attempt in range(2):
+            try:
+                await send_pcm_to_liveavatar_ws(
+                    websocket_url=runtime["websocket_url"],
+                    agent_token=runtime.get("agent_token"),
+                    pcm_audio=pcm_audio,
+                    event_id=event_id,
+                )
+                last_exc = None
+                break
+            except Exception as exc:
+                last_exc = exc
+                if attempt == 0:
+                    await asyncio.sleep(0.25)
+                else:
+                    raise
+        if last_exc:
+            raise last_exc
+    return event_id
+
+def generate_liveavatar_reply(
+    user_text: str,
+    participant_name: Optional[str] = None,
+    participant_role: Optional[str] = None,
+    company_name: Optional[str] = None,
+    host_location: Optional[str] = None,
+    host_fun_fact: Optional[str] = None,
+    conversation: Optional[List[Dict[str, str]]] = None,
+) -> str:
+    """Generate a concise conversational reply for avatar playback."""
+    from gemini_client import gemini_text
+
+    conversation = conversation or []
+    recent_turns = conversation[-8:]
+    convo_lines = []
+    for turn in recent_turns:
+        role = (turn.get("role") or "").strip().lower()
+        text = (turn.get("text") or "").strip()
+        if role in {"user", "assistant"} and text:
+            convo_lines.append(f"{role}: {text}")
+
+    prompt = (
+        "You are a warm onboarding AI assistant speaking through a live avatar.\n"
+        "Reply naturally to the user in 1-2 concise sentences.\n"
+        "Do not use markdown, bullets, labels, or stage directions.\n"
+        "If the user asks for help, ask one clear follow-up question.\n\n"
+        f"Participant name: {participant_name or 'there'}\n"
+        f"Participant role: {participant_role or 'participant'}\n"
+        f"Company: {company_name or 'their company'}\n"
+        f"Location context: {host_location or 'not provided'}\n"
+        f"Fun fact context: {host_fun_fact or 'not provided'}\n"
+        f"Recent context:\n" + ("\n".join(convo_lines) if convo_lines else "(none)") + "\n\n"
+        f"User message: {user_text.strip()}\n\n"
+        "Return only what should be spoken aloud."
+    )
+    reply = gemini_text(prompt)
+    if reply and reply.strip():
+        return reply.strip()
+    return "Thanks for sharing that. Could you tell me a bit more so I can help better?"
+
+def build_host_context(
+    host_name: str,
+    company: str,
+    host_location: Optional[str],
+) -> Dict[str, Any]:
+    """
+    Build host context for avatar personalization.
+    - Uses OpenWeather + Gemini web search via scraping_agent.get_weather_and_sports
+    - Generates fun fact with Gemini when one is not manually provided
+    """
+    location = (host_location or "").strip()
+    local_context: Dict[str, Any] = {}
+    generated_fun_fact = ""
+
+    if location:
+        try:
+            local_context = scraping_agent.get_weather_and_sports(location) or {}
+        except Exception as exc:
+            logger.warning("Host context weather/sports lookup failed for %s: %s", location, exc)
+        local_context["location"] = location
+
+    try:
+        from gemini_client import gemini_text, gemini_json_with_web_search
+
+        web_hint = {}
+        if location:
+            web_hint = gemini_json_with_web_search(
+                f"Find one current, professional small-talk nugget for {location}. "
+                f"Return JSON only: {{\"local_icebreaker\": \"...\"}}"
+            ) or {}
+
+        prompt = (
+            "Create one short fun fact for workshop conversation context.\n"
+            "Keep it professional, neutral, and conversational (max 20 words).\n"
+            "Return only the fun fact sentence.\n\n"
+            f"Host name: {host_name}\n"
+            f"Company: {company}\n"
+            f"Location: {location or 'not provided'}\n"
+            f"Local context: {json.dumps(local_context) if local_context else 'not available'}\n"
+            f"Web hint: {json.dumps(web_hint) if web_hint else 'not available'}\n"
+        )
+        generated_fun_fact = (gemini_text(prompt) or "").strip()
+    except Exception as exc:
+        logger.warning("Host fun fact generation failed: %s", exc)
+
+    if not generated_fun_fact:
+        generated_fun_fact = (
+            local_context.get("sports_icebreaker")
+            or local_context.get("weather")
+            or ""
+        )
+
+    return {
+        "host_location": location or None,
+        "host_fun_fact": generated_fun_fact or None,
+        "host_local_context": local_context or {},
+    }
+
+
+def generate_dynamic_fun_fact(
+    location: Optional[str],
+    participant_role: Optional[str],
+    company_name: Optional[str],
+    base_fun_fact: Optional[str] = None,
+) -> str:
+    """
+    Generate a fresh, random fun fact for the current participant interaction.
+    Prioritizes:
+    1) Location-aware small talk
+    2) Role-relevant tech/news angle
+    3) Mixed blend
+    """
+    loc = (location or "").strip()
+    role = (participant_role or "business professional").strip()
+    company = (company_name or "the company").strip()
+    fallback = (base_fun_fact or "").strip()
+
+    try:
+        from gemini_client import gemini_text, gemini_json_with_web_search
+
+        theme = random.choice(["location", "role_tech", "mixed"])
+        hints: Dict[str, Any] = {}
+
+        if loc:
+            location_hint = gemini_json_with_web_search(
+                f"Find one current, neutral local highlight for {loc}. "
+                f"Return JSON only: {{\"location_highlight\":\"...\"}}"
+            ) or {}
+            if isinstance(location_hint, dict):
+                hints.update(location_hint)
+
+        role_hint = gemini_json_with_web_search(
+            f"Find one current tech trend or headline relevant to a {role}. "
+            f"Return JSON only: {{\"role_tech_highlight\":\"...\"}}"
+        ) or {}
+        if isinstance(role_hint, dict):
+            hints.update(role_hint)
+
+        prompt = (
+            "Write ONE short fun fact for a live onboarding conversation.\n"
+            "Rules:\n"
+            "- 1 sentence only, max 18 words.\n"
+            "- Professional, friendly, and easy to say aloud.\n"
+            "- No hype, no emojis, no bullet points.\n"
+            f"- Theme to prioritize: {theme}.\n\n"
+            f"Participant role: {role}\n"
+            f"Company: {company}\n"
+            f"Location: {loc or 'not provided'}\n"
+            f"Hints: {json.dumps(hints) if hints else 'none'}\n"
+            f"Fallback context: {fallback or 'none'}\n\n"
+            "Return only the fun fact sentence."
+        )
+        fact = (gemini_text(prompt) or "").strip()
+        if fact:
+            return fact
+    except Exception as exc:
+        logger.warning("Dynamic fun fact generation failed: %s", exc)
+
+    return fallback
 
 def store(session_code: str, key: str, value: dict):
     """Append a submission to a phase data bucket."""
@@ -118,6 +440,12 @@ class CreateSessionRequest(BaseModel):
     participant_count: int = 0;  duration_mins: int = 90
     company_url: Optional[str] = None # Added for website scraping
     company_linkedin_url: Optional[str] = None
+    host_location: Optional[str] = None
+    host_fun_fact: Optional[str] = None
+    avatar_id: Optional[str] = None  # LiveAvatar avatar ID
+    voice_id: Optional[str] = None   # ElevenLabs voice ID
+    liveavatar_video_quality: Optional[str] = None
+    liveavatar_video_encoding: Optional[str] = None
 
 class JoinRequest(BaseModel):
     session_code: str;  name: str;  role: str
@@ -193,15 +521,38 @@ class RevealRequest(BaseModel):
 
 
 class LiveAvatarEmbedRequest(BaseModel):
-    """Request to generate a LiveAvatar embed URL for UI/presentation only.
+    """Request to start a LiveAvatar session for the frontend.
     
-    LiveAvatar scope: VIDEO, VOICE, UI only.
-    NOT for data processing, AI logic, or backend computation.
+    The backend owns session token generation + session start, then returns
+    the WebRTC details the frontend needs.
     """
     session_code: Optional[str] = None
     participant_name: Optional[str] = None
     participant_role: Optional[str] = None
     linkedin_url: Optional[str] = None
+
+class LiveAvatarKeepAliveRequest(BaseModel):
+    session_id: str
+
+class LiveAvatarStopRequest(BaseModel):
+    session_id: str
+    reason: str = "USER_CLOSED"
+
+class LiveAvatarSpeakRequest(BaseModel):
+    session_id: str
+    text: str
+    voice_id: Optional[str] = None
+    model_id: str = "eleven_turbo_v2"
+
+class LiveAvatarRespondRequest(BaseModel):
+    session_id: str
+    user_text: str
+    session_code: Optional[str] = None
+    participant_name: Optional[str] = None
+    participant_role: Optional[str] = None
+    conversation: List[Dict[str, str]] = Field(default_factory=list)
+    voice_id: Optional[str] = None
+    model_id: str = "eleven_turbo_v2"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -225,38 +576,72 @@ def health():
 @app.post("/liveavatar/embed")
 async def create_liveavatar_embed(req: LiveAvatarEmbedRequest):
     """
-    Create a LiveAvatar embed URL for the frontend iframe.
-    
-    ⚠️  SCOPE: VIDEO, VOICE, UI only.
-    - Generates iframe URLs for avatar video/voice presentation
-    - Stores API credentials server-side (browser never sees them)
-    - DO NOT pass data processing, AI logic, or backend computation to LiveAvatar
-    
-    Uses backend-held API credentials so the browser never sees them.
+    Start a LiveAvatar session on the backend and return the session details.
+
+    LITE mode lifecycle:
+    1. Generate a LITE session token on the backend
+    2. Start the session on the backend
+    3. Pass WebRTC credentials to the frontend
     """
     api_key = os.getenv("LIVEAVATAR_API_KEY", "").strip()
-    avatar_id = os.getenv("LIVEAVATAR_AVATAR_ID", "").strip()
-    context_id = os.getenv("LIVEAVATAR_CONTEXT_ID", "").strip()
-    voice_id = os.getenv("LIVEAVATAR_VOICE_ID", "").strip()
-    language = os.getenv("LIVEAVATAR_LANGUAGE", "en").strip() or "en"
+    mode_env = os.getenv("LIVEAVATAR_MODE", "LITE").strip().upper()
+    mode = mode_env if mode_env in {"FULL", "LITE"} else "FULL"
+    code = (req.session_code or "").strip().upper()
+    session = sessions.get(code) if code else None
+
+    session_avatar_raw = (session or {}).get("avatar_id")
+    env_avatar_raw = os.getenv("LIVEAVATAR_AVATAR_ID", "").strip()
+    session_avatar_id = normalize_uuid(session_avatar_raw)
+    env_avatar_id = normalize_uuid(env_avatar_raw)
+
+    if session_avatar_raw and not session_avatar_id:
+        logger.warning(
+            "Session %s has invalid avatar_id '%s'; ignoring and trying env fallback",
+            code or "<no-code>",
+            session_avatar_raw,
+        )
+    if env_avatar_raw and not env_avatar_id:
+        logger.error("LIVEAVATAR_AVATAR_ID is not a valid UUID: %s", env_avatar_raw)
+
+    # Environment configuration must take precedence over session/request values.
+    avatar_id = env_avatar_id or session_avatar_id
     sandbox = os.getenv("LIVEAVATAR_SANDBOX", "true").strip().lower() in {"1", "true", "yes", "on"}
+    env_video_quality = os.getenv("LIVEAVATAR_VIDEO_QUALITY", "").strip()
+    env_video_encoding = os.getenv("LIVEAVATAR_VIDEO_ENCODING", "").strip()
+    video_quality = (
+        env_video_quality
+        or (session or {}).get("liveavatar_video_quality")
+        or "high"
+    )
+    video_encoding = (
+        env_video_encoding
+        or (session or {}).get("liveavatar_video_encoding")
+        or "VP8"
+    )
+    custom_livekit_url = os.getenv("LIVEAVATAR_CUSTOM_LIVEKIT_URL", "").strip()
+    custom_livekit_token = os.getenv("LIVEAVATAR_CUSTOM_LIVEKIT_TOKEN", "").strip()
+    context_id = os.getenv("LIVEAVATAR_CONTEXT_ID", "").strip()
+    language = os.getenv("LIVEAVATAR_LANGUAGE", "en").strip() or "en"
+    env_voice_id = os.getenv("LIVEAVATAR_VOICE_ID", "").strip()
+    full_mode_voice_id = env_voice_id or (session or {}).get("voice_id") or "EXAVITQu4vr4xnSDxMaL"
 
-    if not api_key or not avatar_id:
+    if not api_key:
         raise HTTPException(
             503,
-            "LiveAvatar is not configured. Set LIVEAVATAR_API_KEY and LIVEAVATAR_AVATAR_ID in backend/.env.",
+            "LiveAvatar is not configured. Set LIVEAVATAR_API_KEY in backend/.env.",
         )
 
-    if not context_id:
+    if not avatar_id:
         raise HTTPException(
-            503,
-            "LiveAvatar is not configured. Set LIVEAVATAR_CONTEXT_ID in backend/.env to your pre-created context.",
+            400,
+            "Invalid avatar_id. LiveAvatar requires a UUID avatar_id. "
+            "Pass a valid UUID in session creation or set LIVEAVATAR_AVATAR_ID to a UUID.",
         )
 
-    if not voice_id:
+    if mode == "FULL" and (not context_id or not full_mode_voice_id):
         raise HTTPException(
             503,
-            "LiveAvatar is not configured. Set LIVEAVATAR_VOICE_ID in backend/.env to the avatar voice to use.",
+            "FULL mode requires LIVEAVATAR_CONTEXT_ID and LIVEAVATAR_VOICE_ID in backend/.env.",
         )
 
     from gemini_client import gemini_text
@@ -264,11 +649,21 @@ async def create_liveavatar_embed(req: LiveAvatarEmbedRequest):
     prompt_name = (req.participant_name or "there").strip() or "there"
     prompt_role = (req.participant_role or "participant").strip() or "participant"
     linkedin_url = (req.linkedin_url or "").strip()
+    host_location = ((session or {}).get("host_location") or "").strip()
+    host_fun_fact = ((session or {}).get("host_fun_fact") or "").strip()
+    dynamic_fun_fact = generate_dynamic_fun_fact(
+        location=host_location,
+        participant_role=prompt_role,
+        company_name=(session or {}).get("company"),
+        base_fun_fact=host_fun_fact,
+    )
     greeting_prompt = (
         f"Write one short spoken opening line for a LiveAvatar onboarding assistant.\n"
         f"Participant name: {prompt_name}\n"
         f"Participant role: {prompt_role}\n"
         f"LinkedIn URL: {linkedin_url or 'not provided'}\n\n"
+        f"Location context: {host_location or 'not provided'}\n"
+        f"Fun fact context: {dynamic_fun_fact or host_fun_fact or 'not provided'}\n\n"
         f"Requirements:\n"
         f"- Warm, professional, and concise.\n"
         f"- Ask one first onboarding question after the greeting.\n"
@@ -281,6 +676,30 @@ async def create_liveavatar_embed(req: LiveAvatarEmbedRequest):
 
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
+            token_payload = {
+                "mode": mode,
+                "avatar_id": avatar_id,
+                "is_sandbox": sandbox,
+                "video_settings": {
+                    "quality": video_quality,
+                    "encoding": video_encoding,
+                },
+            }
+
+            if mode == "FULL":
+                token_payload["avatar_persona"] = {
+                    "voice_id": full_mode_voice_id,
+                    "context_id": context_id,
+                    "language": language,
+                }
+
+            # Optional: bring your own LiveKit infrastructure for LITE sessions.
+            if mode == "LITE" and custom_livekit_url and custom_livekit_token:
+                token_payload["livekit_config"] = {
+                    "url": custom_livekit_url,
+                    "token": custom_livekit_token,
+                }
+
             token_resp = await client.post(
                 "https://api.liveavatar.com/v1/sessions/token",
                 headers={
@@ -288,24 +707,24 @@ async def create_liveavatar_embed(req: LiveAvatarEmbedRequest):
                     "Content-Type": "application/json",
                     "Accept": "application/json",
                 },
-                json={
-                    "mode": "FULL",
-                    "avatar_id": avatar_id,
-                    "is_sandbox": sandbox,
-                    "avatar_persona": {
-                        "voice_id": voice_id,
-                        "context_id": context_id,
-                        "language": language,
-                    },
-                },
+                json=token_payload,
             )
     except httpx.HTTPError as exc:
         logger.error("LiveAvatar token request failed: %s", exc)
         raise HTTPException(502, "Could not create a LiveAvatar session token right now.")
 
+    if token_resp.status_code == 422:
+        details = upstream_error_text(token_resp)
+        logger.error("LiveAvatar token validation error 422: %s", details)
+        raise HTTPException(400, f"LiveAvatar request validation failed: {details}")
+
     if token_resp.status_code >= 400:
-        logger.error("LiveAvatar token error %s: %s", token_resp.status_code, token_resp.text)
-        raise HTTPException(502, f"LiveAvatar token error: {token_resp.status_code}")
+        details = upstream_error_text(token_resp)
+        logger.error("LiveAvatar token error %s: %s", token_resp.status_code, details)
+        raise HTTPException(
+            502,
+            f"LiveAvatar token error {token_resp.status_code}: {details}",
+        )
 
     token_data = token_resp.json()
     session_id = (
@@ -334,16 +753,48 @@ async def create_liveavatar_embed(req: LiveAvatarEmbedRequest):
         raise HTTPException(502, "Could not start the LiveAvatar session right now.")
 
     if start_resp.status_code >= 400:
-        logger.error("LiveAvatar start error %s: %s", start_resp.status_code, start_resp.text)
-        raise HTTPException(502, f"LiveAvatar start error: {start_resp.status_code}")
+        details = upstream_error_text(start_resp)
+        logger.error("LiveAvatar start error %s: %s", start_resp.status_code, details)
+        raise HTTPException(
+            502,
+            f"LiveAvatar start error {start_resp.status_code}: {details}",
+        )
 
     start_data = start_resp.json()
     start_data = start_data.get("data", start_data)
     livekit_url = start_data.get("livekit_url")
     livekit_token = start_data.get("livekit_client_token") or start_data.get("livekit_token")
+    websocket_url = (
+        start_data.get("websocket_url")
+        or start_data.get("ws_url")
+        or start_data.get("session_websocket_url")
+    )
+    agent_token = (
+        start_data.get("agent_token")
+        or start_data.get("livekit_agent_token")
+    )
     if not livekit_url or not livekit_token:
         logger.error("LiveAvatar start response missing room info: %s", start_data)
         raise HTTPException(502, "LiveAvatar did not return LiveKit room credentials.")
+
+    if session_id:
+        liveavatar_runtime[session_id] = {
+            "websocket_url": websocket_url,
+            "agent_token": agent_token,
+            "voice_id": full_mode_voice_id,
+            "mode": mode,
+            "host_location": host_location or None,
+            "fun_fact": dynamic_fun_fact or host_fun_fact or None,
+        }
+
+    # In LITE mode, proactively send opening text so avatar greets immediately.
+    if mode == "LITE" and session_id and websocket_url and opening_text.strip():
+        async def _speak_opening_text():
+            try:
+                await push_text_to_liveavatar(session_id, opening_text)
+            except Exception as exc:
+                logger.warning("LiveAvatar opening speak failed for %s: %s", session_id, exc)
+        asyncio.create_task(_speak_opening_text())
 
     embed_url = (
         f"https://meet.livekit.io/custom?liveKitUrl={quote(livekit_url, safe='')}"
@@ -354,14 +805,167 @@ async def create_liveavatar_embed(req: LiveAvatarEmbedRequest):
         "embed_url": embed_url,
         "livekit_url": livekit_url,
         "livekit_token": livekit_token,
+        "websocket_url": websocket_url,
+        "agent_token": agent_token,
         "session_id": session_id,
         "session_token": session_token,
+        "mode": mode,
         "sandbox": sandbox,
         "avatar_id": avatar_id,
-        "context_id": context_id,
-        "voice_id": voice_id,
-        "language": language,
+        "video_settings": {
+            "quality": video_quality,
+            "encoding": video_encoding,
+        },
         "opening_text": opening_text,
+    }
+
+
+@app.post("/liveavatar/keep-alive")
+async def keep_liveavatar_session_alive(req: LiveAvatarKeepAliveRequest):
+    """
+    Keep a LiveAvatar session alive while the frontend is still connected.
+    """
+    api_key = os.getenv("LIVEAVATAR_API_KEY", "").strip()
+    if not api_key:
+        raise HTTPException(503, "LiveAvatar API key is not configured.")
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                "https://api.liveavatar.com/v1/sessions/keep-alive",
+                headers={
+                    "X-API-KEY": api_key,
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                },
+                json={"session_id": req.session_id},
+            )
+    except httpx.HTTPError as exc:
+        logger.error("LiveAvatar keep-alive request failed: %s", exc)
+        raise HTTPException(502, "Could not keep the LiveAvatar session alive.")
+
+    if resp.status_code >= 400:
+        details = upstream_error_text(resp)
+        logger.error("LiveAvatar keep-alive error %s: %s", resp.status_code, details)
+        raise HTTPException(
+            502,
+            f"LiveAvatar keep-alive error {resp.status_code}: {details}",
+        )
+
+    return resp.json()
+
+
+@app.post("/liveavatar/stop")
+async def stop_liveavatar_session(req: LiveAvatarStopRequest):
+    """
+    Stop the LiveAvatar session when the user exits the onboarding avatar step.
+    """
+    api_key = os.getenv("LIVEAVATAR_API_KEY", "").strip()
+    if not api_key:
+        raise HTTPException(503, "LiveAvatar API key is not configured.")
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                "https://api.liveavatar.com/v1/sessions/stop",
+                headers={
+                    "X-API-KEY": api_key,
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                },
+                json={
+                    "session_id": req.session_id,
+                    "reason": req.reason or "USER_CLOSED",
+                },
+            )
+    except httpx.HTTPError as exc:
+        logger.error("LiveAvatar stop request failed: %s", exc)
+        raise HTTPException(502, "Could not stop the LiveAvatar session.")
+
+    if resp.status_code >= 400:
+        details = upstream_error_text(resp)
+        logger.error("LiveAvatar stop error %s: %s", resp.status_code, details)
+        raise HTTPException(
+            502,
+            f"LiveAvatar stop error {resp.status_code}: {details}",
+        )
+
+    liveavatar_runtime.pop(req.session_id, None)
+    liveavatar_speak_locks.pop(req.session_id, None)
+    return resp.json()
+
+
+@app.post("/liveavatar/speak")
+async def liveavatar_speak(req: LiveAvatarSpeakRequest):
+    """
+    LITE mode helper: convert text to ElevenLabs PCM and stream it to the avatar websocket.
+    """
+    try:
+        event_id = await push_text_to_liveavatar(
+            session_id=req.session_id,
+            text=req.text,
+            voice_id=req.voice_id,
+            model_id=req.model_id,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("liveavatar/speak failed for %s: %s", req.session_id, exc)
+        raise HTTPException(502, f"LiveAvatar speak pipeline failed: {type(exc).__name__}: {exc}")
+    return {
+        "status": "ok",
+        "session_id": req.session_id,
+        "event_id": event_id,
+    }
+
+
+@app.post("/liveavatar/respond")
+async def liveavatar_respond(req: LiveAvatarRespondRequest):
+    """
+    End-to-end LITE turn:
+    1) Generate LLM text reply
+    2) Synthesize via ElevenLabs (PCM)
+    3) Push audio to LiveAvatar websocket for avatar speech
+    """
+    user_text = (req.user_text or "").strip()
+    if not user_text:
+        raise HTTPException(400, "user_text is required")
+
+    code = (req.session_code or "").strip().upper()
+    session = sessions.get(code) if code else {}
+    runtime = liveavatar_runtime.get(req.session_id) or {}
+    company_name = session.get("company") if session else None
+    host_location = runtime.get("host_location") or (session.get("host_location") if session else None)
+    host_fun_fact = runtime.get("fun_fact") or (session.get("host_fun_fact") if session else None)
+
+    assistant_text = generate_liveavatar_reply(
+        user_text=user_text,
+        participant_name=req.participant_name,
+        participant_role=req.participant_role,
+        company_name=company_name,
+        host_location=host_location,
+        host_fun_fact=host_fun_fact,
+        conversation=req.conversation,
+    )
+
+    try:
+        event_id = await push_text_to_liveavatar(
+            session_id=req.session_id,
+            text=assistant_text,
+            voice_id=req.voice_id,
+            model_id=req.model_id,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("liveavatar/respond failed for %s: %s", req.session_id, exc)
+        raise HTTPException(502, f"LiveAvatar respond pipeline failed: {type(exc).__name__}: {exc}")
+
+    return {
+        "status": "ok",
+        "session_id": req.session_id,
+        "event_id": event_id,
+        "assistant_text": assistant_text,
     }
 
 
@@ -374,6 +978,28 @@ async def create_session(req: CreateSessionRequest):
     while code in sessions:
         code = generate_code()
 
+    env_avatar_raw = os.getenv("LIVEAVATAR_AVATAR_ID", "").strip()
+    env_avatar_id = normalize_uuid(env_avatar_raw)
+    req_avatar_id = normalize_uuid(req.avatar_id)
+    normalized_avatar_id = env_avatar_id or req_avatar_id
+
+    if req.avatar_id and not req_avatar_id:
+        logger.warning("Ignoring non-UUID avatar_id for new session %s: %s", code, req.avatar_id)
+    if env_avatar_raw and not env_avatar_id:
+        logger.error("LIVEAVATAR_AVATAR_ID is not a valid UUID: %s", env_avatar_raw)
+
+    env_voice_id = os.getenv("LIVEAVATAR_VOICE_ID", "").strip()
+    selected_voice_id = env_voice_id or req.voice_id
+    env_video_quality = os.getenv("LIVEAVATAR_VIDEO_QUALITY", "").strip()
+    env_video_encoding = os.getenv("LIVEAVATAR_VIDEO_ENCODING", "").strip()
+    selected_video_quality = env_video_quality or req.liveavatar_video_quality or "high"
+    selected_video_encoding = env_video_encoding or req.liveavatar_video_encoding or "VP8"
+    host_context = build_host_context(
+        host_name=req.host_name,
+        company=req.company,
+        host_location=req.host_location,
+    )
+
     # Create session in database
     try:
         db_result = await db.create_session(
@@ -381,6 +1007,10 @@ async def create_session(req: CreateSessionRequest):
             host_name=req.host_name,
             company=req.company,
             industry=req.industry,
+            participant_count=req.participant_count,
+            duration_mins=req.duration_mins,
+            avatar_id=normalized_avatar_id,
+            voice_id=selected_voice_id,
         )
     except Exception as e:
         logger.exception("create_session: database insert failed")
@@ -394,6 +1024,13 @@ async def create_session(req: CreateSessionRequest):
         "duration_mins": req.duration_mins, "current_phase": 0,
         "company_url": req.company_url,
         "company_linkedin_url": req.company_linkedin_url,
+        "host_location": host_context.get("host_location"),
+        "host_fun_fact": host_context.get("host_fun_fact"),
+        "host_local_context": host_context.get("host_local_context", {}),
+        "avatar_id": normalized_avatar_id,  # LiveAvatar avatar selection
+        "voice_id": selected_voice_id,    # Voice for app-managed TTS prompts
+        "liveavatar_video_quality": selected_video_quality,
+        "liveavatar_video_encoding": selected_video_encoding,
         "participants": [], "status": "waiting",
         "created_at": datetime.datetime.utcnow().isoformat(),
         "revealed_phases": [],   # phases host has revealed to participants
@@ -412,6 +1049,9 @@ async def create_session(req: CreateSessionRequest):
     # Agent 1: generate phase 0 intro message (now seed-aware)
     intro = facilitator.get_phase_intro(0, req.company)
     logger.info(f"✅ Session created: {code} | {req.company} | {req.industry}")
+    logger.info(f"   Avatar: {normalized_avatar_id} | Voice: {selected_voice_id}")
+    logger.info(f"   Video: {session['liveavatar_video_quality']} | Encoding: {session['liveavatar_video_encoding']}")
+    logger.info(f"   Host context: location={session.get('host_location')} | fun_fact={'yes' if session.get('host_fun_fact') else 'no'}")
     logger.info(f"   Seeded: {len(session['known_departments'])} departments, {len(session['pillar_names'])} pillars")
 
     # Start background company scraping if URL is provided
@@ -1229,8 +1869,6 @@ def seed_overview():
 # ─────────────────────────────────────────────────────────────────────────────
 # Voice — ElevenLabs TTS + transcript cleaning
 # ─────────────────────────────────────────────────────────────────────────────
-import httpx
-
 class SpeakRequest(BaseModel):
     model_config = {"protected_namespaces": ()}
     text: str
@@ -1252,8 +1890,9 @@ async def speak(req: SpeakRequest):
         # Surface a clear error so the frontend can skip TTS gracefully.
         logger.warning("TTS disabled: ELEVENLABS_API_KEY not set")
         raise HTTPException(503, "ELEVENLABS_API_KEY not set — voice disabled")
-    # url = "https://subpatronal-yolanda-promonarchy.ngrok-free.dev/v1/third-party/elevenlabs/proxy/v1/text-to-speech/21m00Tcm4TlvDq8ikWAM"
-    url = f"https://api.elevenlabs.io/v1/text-to-speech/{req.voice_id}/stream"
+    env_voice_id = os.getenv("ELEVENLABS_VOICE_ID", "").strip()
+    selected_voice_id = env_voice_id or req.voice_id
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{selected_voice_id}/stream"
     headers = {
         "xi-api-key": api_key,
         "Content-Type": "application/json",
@@ -1272,7 +1911,7 @@ async def speak(req: SpeakRequest):
     logger.info(
         "TTS request %s: voice_id=%s model_id=%s text_len=%s",
         req_id,
-        req.voice_id,
+        selected_voice_id,
         req.model_id,
         len(req.text or ""),
     )
@@ -1362,3 +2001,218 @@ async def onboarding_chat_endpoint(req: OnboardingChatRequest):
         role=req.role,
         department=req.department
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 1 - Avatar-Guided Survey (Workshop Guide + Gemini)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class SurveyTurnRequest(BaseModel):
+    """Request for next survey question and extraction."""
+    session_code: str
+    participant_id: Optional[str] = None
+    turn: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Current turn data: area, participant_response, response_word_count"
+    )
+    working_memory: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Accumulated state: confirmed_name, coverage_map, extracted_so_far, etc."
+    )
+
+class SurveyPersistRequest(BaseModel):
+    """Request to persist survey data to phase_data table."""
+    session_code: str
+    participant_id: str
+    extracted: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Extracted data from survey: ai_maturity, company_ai_maturity, etc."
+    )
+    turn_history: List[Dict] = Field(
+        default_factory=list,
+        description="Full conversation history for audit trail"
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Survey Agent: Question Generation & Data Extraction
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.post("/agent/survey-turn")
+async def survey_turn(req: SurveyTurnRequest):
+    """
+    Gemini survey agent: generates next question + extracts data from current response.
+    
+    Implements guided survey coverage + vocabulary calibration + pace adaptation.
+    """
+    code = req.session_code.strip().upper()
+    if code not in sessions:
+        raise HTTPException(404, "Session not found")
+    
+    session = sessions[code]
+    company_name = session.get("company", "")
+    
+    working_memory = req.working_memory or {}
+    turn = req.turn or {}
+    
+    # Initialize coverage map if not present
+    if "coverage_map" not in working_memory:
+        working_memory["coverage_map"] = survey_agent.initialize_coverage_map()
+
+    # Hydrate company DNA context from session when available.
+    company_dna = session.get("company_dna") or {}
+    if isinstance(company_dna, dict):
+        if not working_memory.get("company_vision"):
+            working_memory["company_vision"] = company_dna.get("vision", "")
+        if not working_memory.get("company_goals"):
+            working_memory["company_goals"] = company_dna.get("goals", [])
+
+    # Hydrate participant role context so questions can be role-aware.
+    if not working_memory.get("confirmed_role") and req.participant_id:
+        participant_ctx = participants.get(req.participant_id) or {}
+        if participant_ctx.get("role"):
+            working_memory["confirmed_role"] = participant_ctx.get("role")
+    
+    # Turn history for pace calibration
+    turn_history = working_memory.get("turn_history", [])
+    
+    # Step 1: Extract data from current response (if this is not the first turn)
+    extracted_this_turn = {}
+    current_area = turn.get("area")
+    participant_response = turn.get("participant_response", "").strip()
+    
+    if current_area and participant_response:
+        try:
+            extracted_this_turn = await survey_agent.extract_data_from_response(
+                current_area,
+                participant_response,
+                working_memory.get("extracted_so_far", {}).get("ai_maturity")
+            )
+            # Accumulate extracted data
+            if extracted_this_turn:
+                working_memory.setdefault("extracted_so_far", {}).update(extracted_this_turn)
+        except Exception as exc:
+            logger.error(f"Extraction failed for {current_area}: {exc}")
+    
+    # Step 2: Mark current area as answered
+    if current_area and current_area in working_memory["coverage_map"]:
+        working_memory["coverage_map"][current_area] = "answered"
+    
+    # Step 3: Check if session is complete
+    if survey_agent.is_session_complete(working_memory["coverage_map"]):
+        return {
+            "next_question": "",
+            "next_area": None,
+            "extracted": extracted_this_turn,
+            "coverage_map": working_memory["coverage_map"],
+            "session_complete": True,
+            "extracted_so_far": working_memory.get("extracted_so_far", {})
+        }
+    
+    # Step 4: Get next area to cover
+    next_area = survey_agent.get_next_area_to_cover(
+        working_memory["coverage_map"],
+        current_area
+    )
+    
+    if not next_area:
+        return {
+            "next_question": "",
+            "next_area": None,
+            "extracted": extracted_this_turn,
+            "coverage_map": working_memory["coverage_map"],
+            "session_complete": True,
+            "extracted_so_far": working_memory.get("extracted_so_far", {})
+        }
+    
+    # Step 5: Generate next question
+    try:
+        ai_maturity = working_memory.get("extracted_so_far", {}).get("ai_maturity")
+        response_word_count = survey_agent.get_average_response_length(turn_history)
+
+        next_question = await survey_agent.generate_question_for_area(
+            next_area,
+            working_memory.get("confirmed_name", ""),
+            company_name,
+            ai_maturity,
+            response_word_count,
+            context={
+                "company_vision": working_memory.get("company_vision", ""),
+                "company_goals": working_memory.get("company_goals", []),
+                "industry": session.get("industry", ""),
+                "participant_role": working_memory.get("confirmed_role", ""),
+            },
+        )
+    except Exception as exc:
+        logger.error(f"Question generation failed for {next_area}: {exc}")
+        next_question = f"Tell me more about { next_area.replace('_', ' ')}."
+    
+    # Mark next area as asked
+    working_memory["coverage_map"][next_area] = "asked"
+    
+    # Update turn history
+    if current_area:
+        turn_history.append({
+            "area": current_area,
+            "participant_response": participant_response,
+            "extracted": extracted_this_turn
+        })
+    working_memory["turn_history"] = turn_history
+    
+    return {
+        "next_question": next_question,
+        "next_area": next_area,
+        "extracted": extracted_this_turn,
+        "coverage_map": working_memory["coverage_map"],
+        "session_complete": False,
+        "extracted_so_far": working_memory.get("extracted_so_far", {})
+    }
+
+
+@app.post("/survey/persist")
+async def persist_survey_data(req: SurveyPersistRequest):
+    """
+    Write survey results to phase_data table.
+    One row per area with extracted data.
+    """
+    code = req.session_code.strip().upper()
+    if code not in sessions:
+        raise HTTPException(404, "Session not found")
+    
+    session = sessions[code]
+    session_id = session.get("id")
+    participant_id = req.participant_id
+    extracted = req.extracted or {}
+    
+    try:
+        # Write one phase_data row per area with data
+        for area_key, value in extracted.items():
+            if not value:
+                continue
+            
+            # Store in phase_data table
+            store(code, "phase1_avatar_survey", {
+                "participant_id": participant_id,
+                "area": area_key,
+                "value": value,
+                "timestamp": datetime.datetime.utcnow().isoformat()
+            })
+        
+        # Broadcast to participants
+        await broadcast(code, {
+            "type": "survey_complete",
+            "participant_id": participant_id,
+            "areas_captured": len([v for v in extracted.values() if v])
+        })
+        
+        logger.info(f"Survey data persisted for {participant_id} in {code}")
+        
+        return {
+            "status": "persisted",
+            "participant_id": participant_id,
+            "areas_captured": len([v for v in extracted.values() if v])
+        }
+    except Exception as exc:
+        logger.error(f"Survey persistence failed: {exc}")
+        raise HTTPException(500, f"Failed to persist survey data: {exc}")
+

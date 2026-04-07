@@ -16,7 +16,9 @@ CREATE TABLE IF NOT EXISTS sessions (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     revealed_phases TEXT[] DEFAULT ARRAY[]::TEXT[],
-    workshop_data JSONB DEFAULT '{}'
+    workshop_data JSONB DEFAULT '{}',
+    avatar_id VARCHAR(100),
+    voice_id VARCHAR(100)
 );
 
 CREATE TABLE IF NOT EXISTS company_dna (
