@@ -1,182 +1,294 @@
-import React, { useState } from 'react';
+﻿import { useState, useEffect, useRef } from 'react'
+import AvatarGuidedOnboarding from './AvatarGuidedOnboarding'
 
 const ROLES = [
-  'CEO/Founder', 'CTO/Technology Leader', 'COO/Operations',
-  'Product Manager', 'Data/AI Engineer', 'Business Analyst',
-  'Department Head', 'Consultant', 'Other'
-];
+  'CEO / Founder', 'CTO / Technology Leader', 'COO / Operations',
+  'Product Manager', 'Data / AI Engineer', 'Business Analyst',
+  'Department Head', 'Consultant', 'Lead Generation', 'Other',
+]
 
-const FAMILIARITY = [
-  { level: 1, label: 'Getting Started', desc: 'New to AI tools and their capabilities' },
-  { level: 3, label: 'Intermediate', desc: 'Have used some AI tools for specific tasks' },
-  { level: 5, label: 'Regular User', desc: 'Work with AI tools deeply and regularly' },
-];
+export default function Phase1_Onboarding({ api, getWsBase, session, role, onComplete, onBack }) {
+  const [sessionCode, setSessionCode] = useState(session?.code || '')
+  const [step, setStep] = useState(role === 'host' ? 'profile' : 'code')
+  const [resolvedSession, setResolvedSession] = useState(session)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(null)
 
-function Phase1_Onboarding({ api, session, role, onComplete, onBack }) {
-  const [sub, setSub] = useState(role === 'participant' && !session ? 'CODE' : 'PROFILE');
-  const [code, setCode] = useState('');
-  const [currentSession, setCurrentSession] = useState(session);
-  const [form, setForm] = useState({
-    name: '', role: '', department: '',
-    ai_confidence: 3
-  });
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
+  const [name, setName] = useState(role === 'host' ? (session?.host_name || '') : '')
+  const [selectedRole, setSelectedRole] = useState('')
+  const [customRole, setCustomRole] = useState('')
+  const [linkedinUrl, setLinkedinUrl] = useState('')
 
-  const handleValidateCode = async () => {
-    if (code.length < 4) return;
-    setLoading(true); setError('');
-    try {
-      const data = await api(`/session/${code.toUpperCase()}`);
-      setCurrentSession(data);
-      setSub('PROFILE');
-    } catch {
-      setError('Invalid session code or session not found.');
-    } finally {
-      setLoading(false);
+  const [dna, setDna] = useState(null)
+  const [profile, setProfile] = useState(null)
+  const [isReviewing, setIsReviewing] = useState(false)
+  const wsRef = useRef(null)
+
+  useEffect(() => {
+    if (!sessionCode || !getWsBase) return
+    let disposed = false
+    const ws = new WebSocket(
+      `${getWsBase()}/ws/${sessionCode}?participant_id=${role === 'host' ? 'host' : 'joining'}`
+    )
+    wsRef.current = ws
+    ws.onopen = () => {
+      if (disposed) ws.close()
     }
-  };
+
+    ws.onmessage = (e) => {
+      try {
+        const msg = JSON.parse(e.data)
+        if (msg.type === 'company_dna_ready') {
+          setDna(msg.dna)
+          if (role === 'host') setIsReviewing(true)
+        }
+        if (msg.type === 'participant_profile_ready' && msg.participant_id === session?.participant_id) {
+          setProfile(msg.profile)
+          setIsReviewing(true)
+        }
+      } catch (err) {
+        console.error('WS Error:', err)
+      }
+    }
+
+    return () => {
+      disposed = true
+      if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CLOSING) {
+        ws.close()
+      }
+    }
+  }, [sessionCode, getWsBase, role, session?.participant_id])
+
+  const activeRole = selectedRole === 'Other' ? (customRole.trim() || 'Other') : selectedRole
+  const isFormValid = Boolean(name.trim() && activeRole && linkedinUrl.trim())
+  const avatarReady = Boolean(activeRole && linkedinUrl.trim())
+
+  const handleCodeSubmit = async () => {
+    if (!sessionCode.trim()) return
+    setLoading(true)
+    setError(null)
+    try {
+      const normalizedCode = sessionCode.trim().toUpperCase()
+      const data = await api(`/session/${normalizedCode}`)
+      setResolvedSession(data)
+      setSessionCode(normalizedCode)
+      setStep('profile')
+    } catch {
+      setError('Session not found. Check your code and try again.')
+    } finally {
+      setLoading(false)
+    }
+  }
 
   const handleJoin = async () => {
-    setLoading(true); setError('');
+    if (!isFormValid) return
+    setLoading(true)
+    setError(null)
     try {
+      const activeSession = resolvedSession || session || {
+        code: (resolvedSession?.code || sessionCode).trim().toUpperCase(),
+      }
       const data = await api('/participant/join', {
         method: 'POST',
         body: JSON.stringify({
-          session_code: currentSession.code,
-          ...form
-        })
-      });
-      onComplete({ participant: data, session: currentSession });
-    } catch {
-      setError('Error joining session. Please try again.');
+          session_code: activeSession.code,
+          name,
+          role: activeRole,
+          department: activeRole,
+          top_challenge: `LinkedIn provided for ${activeRole}`,
+          ai_confidence: 3,
+          conversation: [],
+          linkedin_url: linkedinUrl,
+        }),
+      })
+      onComplete({
+        participant: data,
+        session: activeSession,
+      })
+    } catch (err) {
+      setError(err.message || 'Could not join session. Please try again.')
     } finally {
-      setLoading(false);
+      setLoading(false)
     }
-  };
-
-  if (sub === 'CODE') {
-    return (
-      <div className="phase-shell fade-up">
-        <header className="phase-header">
-          <div className="phase-logo"><span className="logo-icon">◈</span> AI Copilot</div>
-          <div className="phase-indicator">
-            <div className="phase-ind-dot"></div>
-            <span className="phase-ind-label">Join Session</span>
-          </div>
-        </header>
-        <main className="phase-body" style={{ justifyContent: 'center', alignItems: 'center', textAlign: 'center' }}>
-          <span className="badge badge-accent">Participant Join</span>
-          <h1 className="phase-title">Enter Session Code</h1>
-          <p className="phase-desc">Check your email or host screen for the 6-character code.</p>
-          <input className="input" style={{ fontSize: '28px', letterSpacing: '0.2em', textAlign: 'center', textTransform: 'uppercase', maxWidth: '280px' }}
-            maxLength={6} placeholder="000000" value={code}
-            onChange={e => setCode(e.target.value)} autoFocus
-            onKeyDown={e => e.key === 'Enter' && handleValidateCode()} />
-          {error && <div className="error-banner">{error}</div>}
-          <button className="btn btn-primary" disabled={code.length < 4 || loading} onClick={handleValidateCode}>
-            {loading ? <div className="spinner"></div> : 'Find Session'}
-          </button>
-        </main>
-        <footer className="phase-footer">
-          <button className="btn btn-ghost" onClick={onBack}>← Back</button>
-          <div></div>
-        </footer>
-      </div>
-    );
   }
 
-  const profileValid = form.name && form.role && form.department;
+  const handleConfirm = async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      if (role === 'host' && dna) {
+        await api(`/session/${sessionCode}/dna`, {
+          method: 'POST',
+          body: JSON.stringify(dna),
+        })
+      } else if (profile) {
+        await api(`/participant/${session?.participant_id}/profile`, {
+          method: 'POST',
+          body: JSON.stringify(profile),
+        })
+        setName(profile.name)
+        setSelectedRole(profile.role)
+      }
+      setIsReviewing(false)
+    } catch {
+      setError('Could not save your confirmation. Please try again.')
+    } finally {
+      setLoading(false)
+    }
+  }
 
   return (
     <div className="phase-shell fade-up">
-      <header className="phase-header">
-        <div className="phase-logo"><span className="logo-icon">◈</span> AI Copilot</div>
+      <div className="phase-header">
+        <div className="phase-logo">AI Copilot</div>
         <div className="phase-indicator">
-          <div className="phase-ind-dot"></div>
-          <span className="phase-ind-label">Phase 1 — Onboarding</span>
+          <div className="phase-dot pulse" />
+          <span className="phase-label">Phase 1 Onboarding</span>
         </div>
-      </header>
+      </div>
 
-      <main className="phase-body">
-        {currentSession && (
-          <div className="session-code-box">
-            <span className="session-code-label">Active Session</span>
-            <span className="session-code-value">{currentSession.code}</span>
-            <div className="info-card" style={{ marginTop: '8px' }}>
-              <div className="info-row"><span className="info-key">Company</span><span className="info-val">{currentSession.company}</span></div>
-              <div className="info-row"><span className="info-key">Industry</span><span className="info-val">{currentSession.industry}</span></div>
-              <div className="info-row"><span className="info-key">Duration</span><span className="info-val">{currentSession.duration_mins} min</span></div>
-            </div>
-            {role === 'host' && <span className="session-code-hint">Share this code with participants</span>}
+      {step === 'code' && (
+        <div className="phase-body">
+          <div className="phase-title-block">
+            <span className="badge badge-accent">Join Session</span>
+            <h2 className="phase-title">Enter your<br />session code</h2>
+            <p className="phase-desc">Your host will share a 6-character code. Enter it below.</p>
           </div>
-        )}
-
-        <div className="phase-title-block">
-          <h1 className="phase-title">Complete your profile</h1>
-        </div>
-
-        <div className="phase-form">
           <div className="input-group">
-            <label className="input-label">Full Name</label>
-            <input className="input" placeholder="e.g. Jordan Smith"
-              value={form.name} onChange={e => setForm({...form, name: e.target.value})} />
+            <input className="input" style={{ fontSize: 28, letterSpacing: '0.2em', textAlign: 'center', textTransform: 'uppercase' }} maxLength={6} placeholder="AB12CD" value={sessionCode} onChange={e => setSessionCode(e.target.value.toUpperCase())} onKeyDown={e => e.key === 'Enter' && handleCodeSubmit()} autoFocus />
           </div>
-
-          <div className="grid-2">
-            <div className="input-group">
-              <label className="input-label">Your Role</label>
-              <select className="input" value={form.role}
-                onChange={e => setForm({...form, role: e.target.value})}>
-                <option value="" disabled>Select role...</option>
-                {ROLES.map(r => <option key={r} value={r}>{r}</option>)}
-              </select>
-            </div>
-            <div className="input-group">
-              <label className="input-label">Department</label>
-              <input className="input" placeholder="e.g. Engineering"
-                value={form.department} onChange={e => setForm({...form, department: e.target.value})} />
-            </div>
-          </div>
-
-          <div className="input-group">
-            <label className="input-label">How familiar are you with AI tools?</label>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              {FAMILIARITY.map(c => (
-                <button key={c.level} type="button" onClick={() => setForm({...form, ai_confidence: c.level})}
-                  style={{
-                    display: 'flex', alignItems: 'center', gap: '16px', padding: '14px 16px',
-                    background: form.ai_confidence === c.level ? 'var(--accent-glow)' : 'var(--bg-card)',
-                    border: form.ai_confidence === c.level ? '0.5px solid var(--accent-soft)' : '0.5px solid var(--border)',
-                    borderRadius: 'var(--r-md)', textAlign: 'left', cursor: 'pointer',
-                    transition: 'all var(--t)',
-                    boxShadow: form.ai_confidence === c.level ? 'var(--shadow-glow)' : 'none'
-                  }}>
-                  <div>
-                    <div style={{ fontSize: '13px', fontWeight: 700, fontFamily: 'var(--font-h)',
-                      color: form.ai_confidence === c.level ? 'var(--text)' : 'var(--text-2)' }}>{c.label}</div>
-                    <div style={{ fontSize: '11px', color: 'var(--text-3)' }}>{c.desc}</div>
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
-
           {error && <div className="error-banner">{error}</div>}
+          <div className="phase-footer" style={{ marginTop: 'auto' }}>
+            <div />
+            <button className="btn btn-primary" onClick={handleCodeSubmit} disabled={loading || !sessionCode.trim()}>
+              {loading ? <><span className="spinner" /> Checking...</> : 'Join ->'}
+            </button>
+          </div>
         </div>
-      </main>
+      )}
 
-      <footer className="phase-footer">
-        <button className="btn btn-ghost" onClick={() => {
-          if (sub === 'PROFILE' && role === 'participant' && !session) setSub('CODE');
-          else onBack();
-        }}>← Back</button>
-        <button className="btn btn-primary" disabled={!profileValid || loading} onClick={handleJoin}>
-          {loading ? <div className="spinner"></div> : 'Enter Workshop →'}
-        </button>
-      </footer>
+      {step === 'profile' && (
+        <>
+          {resolvedSession && (
+            <div style={{ padding: '8px 22px', background: 'var(--accent-light)', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+              <span style={{ fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--accent)' }}>Joining</span>
+              <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', fontFamily: 'var(--font-h)' }}>
+                {resolvedSession.company} | {resolvedSession.code}
+              </span>
+            </div>
+          )}
+
+          <div className="phase-body">
+            {isReviewing ? (
+              <div className="review-step fade-up">
+                <div className="phase-title-block">
+                  <span className="badge badge-accent">Review Required</span>
+                  <h2 className="phase-title">Confirm {role === 'host' ? 'Company DNA' : 'Your Profile'}</h2>
+                  <p className="phase-desc">Our AI has researched the details below. Please correct anything that isn't accurate.</p>
+                </div>
+                <div className="phase-form">
+                  {role === 'host' && dna && (
+                    <>
+                      <div className="input-group">
+                        <label className="input-label">Vision</label>
+                        <textarea className="input" rows={3} value={dna.vision} onChange={e => setDna({ ...dna, vision: e.target.value })} />
+                      </div>
+                      <div className="input-group">
+                        <label className="input-label">Key Goals (Comma separated)</label>
+                        <input className="input" value={dna.goals.join(', ')} onChange={e => setDna({ ...dna, goals: e.target.value.split(',').map(s => s.trim()) })} />
+                      </div>
+                    </>
+                  )}
+                  {role !== 'host' && profile && (
+                    <>
+                      <div className="input-group">
+                        <label className="input-label">Identified Role</label>
+                        <input className="input" value={profile.role} onChange={e => setProfile({ ...profile, role: e.target.value })} />
+                      </div>
+                      <div className="input-group">
+                        <label className="input-label">Profile Summary</label>
+                        <textarea className="input" rows={3} value={profile.summary} onChange={e => setProfile({ ...profile, summary: e.target.value })} />
+                      </div>
+                    </>
+                  )}
+                </div>
+                <div className="phase-footer" style={{ marginTop: 24 }}>
+                  <button className="btn btn-primary btn-block" onClick={handleConfirm} disabled={loading}>
+                    {loading ? 'Saving...' : 'Confirm and Continue ->'}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="phase-form">
+                <div className="phase-title-block">
+                  <span className="badge badge-accent">Your Profile</span>
+                  <h2 className="phase-title">Tell us about<br />yourself</h2>
+                  <p className="phase-desc">Enter the basics first, then continue through the avatar-guided onboarding flow.</p>
+                </div>
+
+                <div className="input-group">
+                  <label className="input-label">Full name</label>
+                  <input className="input" placeholder="Your name" value={name} onChange={e => setName(e.target.value)} />
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                  <div className="input-group">
+                    <label className="input-label">Your role</label>
+                    <select className="input" value={selectedRole} onChange={e => setSelectedRole(e.target.value)}>
+                      <option value="">Select role...</option>
+                      {ROLES.map(r => <option key={r} value={r}>{r}</option>)}
+                    </select>
+                  </div>
+                  {selectedRole === 'Other' && (
+                    <div className="input-group fade-in">
+                      <label className="input-label">Custom Role Name</label>
+                      <input className="input" placeholder="e.g. Sales Manager" value={customRole} onChange={e => setCustomRole(e.target.value)} autoFocus />
+                    </div>
+                  )}
+                  <div className="input-group">
+                    <label className="input-label">LinkedIn (Optional)</label>
+                    <input className="input" placeholder="https://linkedin.com/..." value={linkedinUrl} onChange={e => setLinkedinUrl(e.target.value)} />
+                  </div>
+                </div>
+
+                {activeRole && !avatarReady && (
+                  <div className="input-group">
+                    <label className="input-label">Next window: avatar guide</label>
+                    <div className="live-avatar-help">
+                      Add your LinkedIn URL and the avatar will open in the next step with the first question.
+                    </div>
+                  </div>
+                )}
+
+                {avatarReady && (
+                  <div className="input-group">
+                    <label className="input-label">
+                      Next window: avatar guide
+                      <span style={{ marginLeft: 6, fontSize: 10, color: 'var(--accent)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>HeyGen Live</span>
+                    </label>
+                    <AvatarGuidedOnboarding
+                      api={api}
+                      sessionCode={resolvedSession?.code || sessionCode}
+                      name={name}
+                      role={activeRole}
+                      linkedinUrl={linkedinUrl}
+                    />
+                  </div>
+                )}
+
+                {error && <div className="error-banner">{error}</div>}
+
+                <div className="phase-footer" style={{ marginTop: 32 }}>
+                  <button className="btn btn-ghost" onClick={onBack}>Back</button>
+                  <button className="btn btn-primary" onClick={handleJoin} disabled={!isFormValid || loading}>
+                    {loading ? <><span className="spinner" /> Joining...</> : 'Enter Workshop ->'}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </>
+      )}
     </div>
-  );
+  )
 }
-
-export default Phase1_Onboarding;

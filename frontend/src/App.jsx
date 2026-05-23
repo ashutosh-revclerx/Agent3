@@ -1,10 +1,14 @@
 import React, { useState } from 'react';
 import './App.css';
-import './components/phases.css';
+import './styles/phases.css';
 import Phase0_Setup from './components/Phase0_Setup';
 import Phase1_Onboarding from './components/Phase1_Onboarding';
 import Phase2_Context from './components/Phase2_Context';
 import Phase3_Problems from './components/Phase3_Problems';
+import Phase4_Opportunities from './components/Phase4_opportunities';
+import Phase5_Poll1 from './components/Phase5_Poll1';
+import Phase6_GlobalAdoptionInsight from './components/Phase6_GlobalAdoptionInsight';
+import Phase7_Poll2 from './components/Phase7_poll2';
 import ActivityA_DataAudit from './components/ActivityA_DataAudit';
 import ActivityB_Confidence from './components/ActivityB_Confidence';
 import ActivityC_PromptEngineering from './components/ActivityC_PromptEngineering';
@@ -20,7 +24,14 @@ const api = async (path, options = {}) => {
     },
     ...options,
   });
-  if (!res.ok) throw new Error(`API error ${res.status}`);
+  if (!res.ok) {
+    let message = `API error ${res.status}`;
+    try {
+      const data = await res.json();
+      message = data?.detail || data?.message || message;
+    } catch {}
+    throw new Error(message);
+  }
   return res.json();
 };
 
@@ -28,7 +39,8 @@ const getWsBase = () => API_BASE.replace(/^http/, 'ws');
 
 const PHASES = {
   HOME: 'HOME', SETUP: 'SETUP', ONBOARDING: 'ONBOARDING',
-  CONTEXT: 'CONTEXT', PROBLEMS: 'PROBLEMS',
+  CONTEXT: 'CONTEXT', PROBLEMS: 'PROBLEMS', OPPORTUNITIES: 'OPPORTUNITIES',
+  POLL_1: 'POLL_1', BENCHMARK: 'BENCHMARK', POLL_2: 'POLL_2',
   ACTIVITY_A: 'ACTIVITY_A', ACTIVITY_B: 'ACTIVITY_B', ACTIVITY_C: 'ACTIVITY_C',
 };
 
@@ -38,7 +50,7 @@ function App() {
   const [participant, setParticipant] = useState(null);
   const [role, setRole] = useState(null); // 'host' | 'participant'
 
-  const shared = { api, getWsBase, session, participant, mode: role };
+  const shared = { api, apiBase: API_BASE, getWsBase, session, participant, mode: role };
 
   const renderPhase = () => {
     switch (phase) {
@@ -116,7 +128,75 @@ function App() {
 
       case PHASES.ACTIVITY_C:
         return <ActivityC_PromptEngineering {...shared}
-          onComplete={() => setPhase(PHASES.HOME)}
+          onComplete={() => setPhase(PHASES.OPPORTUNITIES)}
+        />;
+
+      case PHASES.OPPORTUNITIES:
+        return <Phase4_Opportunities {...shared}
+          onComplete={(data) => {
+            if (data?.use_cases?.length) {
+              setSession((prev) => ({
+                ...(prev || {}),
+                workshop_data: {
+                  ...(prev?.workshop_data || {}),
+                  use_cases: data.use_cases,
+                  verification_summary: data.verification_summary,
+                  generation_metadata: data.generation_metadata,
+                  search_evidence: data.search_evidence,
+                },
+              }));
+            }
+            setPhase(PHASES.POLL_1);
+          }}
+        />;
+
+      case PHASES.POLL_1:
+        return <Phase5_Poll1 {...shared}
+          onComplete={(data) => {
+            if (data?.results) {
+              setSession((prev) => ({
+                ...(prev || {}),
+                workshop_data: {
+                  ...(prev?.workshop_data || {}),
+                  poll1_results: data.results,
+                },
+              }));
+            }
+            setPhase(PHASES.BENCHMARK);
+          }}
+        />;
+
+      case PHASES.BENCHMARK:
+        return <Phase6_GlobalAdoptionInsight {...shared}
+          onComplete={(data) => {
+            if (data) {
+              setSession((prev) => ({
+                ...(prev || {}),
+                workshop_data: {
+                  ...(prev?.workshop_data || {}),
+                  benchmark: data,
+                },
+              }));
+            }
+            setPhase(PHASES.POLL_2);
+          }}
+        />;
+
+      case PHASES.POLL_2:
+        return <Phase7_Poll2 {...shared}
+          onComplete={(data) => {
+            if (data?.results || data?.shift) {
+              setSession((prev) => ({
+                ...(prev || {}),
+                workshop_data: {
+                  ...(prev?.workshop_data || {}),
+                  ...(data?.results ? { poll2_results: data.results } : {}),
+                  ...(data?.shift ? { vote_shift: data.shift } : {}),
+                },
+              }));
+            }
+            setPhase(PHASES.HOME);
+          }}
         />;
 
       default:

@@ -13,24 +13,36 @@ Responsibility:
 Activated: Phase 2 through Phase 3 (continuously)
 """
 from gemini_client import gemini_json
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+from seed_context import build_system_prompt, get_all_pain_points
+from .industry_benchmark import get_industry_benchmarks
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Phase 2 — Business Objective Map
 # ─────────────────────────────────────────────────────────────────────────────
 def build_objective_map(company: str, industry: str, objectives: list,
-                        growth_areas: list, challenges: str) -> dict:
+                        growth_areas: list, challenges: str,
+                        session: dict = None, participant_role: str = "Other") -> dict:
     """
     Analyses strategic objectives, growth priorities, and challenge text.
     Returns a business objective map with themed clusters.
     """
+    role_context = f"This response comes from a participant with the role: {participant_role}. " \
+        f"Interpret their objectives and challenges through the lens of that role. " \
+        f"Use role-appropriate language in summaries and AI opportunities."
+
     prompt = f"""You are an AI strategy analyst in a live consulting workshop.
 
 Organisation: {company}
 Industry: {industry}
+Participant role: {participant_role}
 Strategic objectives selected: {', '.join(objectives)}
 Growth priorities: {', '.join(growth_areas)}
 Operational challenges described: {challenges}
+
+{role_context}
 
 Generate a business objective map. Return JSON only:
 {{
@@ -56,47 +68,111 @@ Rules:
     if result:
         return result
 
-    # ── Fallback ──
+    # ── Fallback (runs when GEMINI_API_KEY is not set) ──
+    # Match on label text since frontend now sends labels, not IDs
+    obj_text = " ".join(objectives).lower()
+    growth_text = " ".join(growth_areas).lower()
+
     clusters = []
-    if any(o in objectives for o in ['revenue', 'cx', 'scale']):
+
+    # Cluster 1 — Growth / commercial signals
+    growth_keywords = ["revenue", "growth", "market", "customer", "retention", "sales", "product", "innovation", "monetis"]
+    if any(k in obj_text or k in growth_text for k in growth_keywords):
+        obj_matches = [o for o in objectives if any(k in o.lower() for k in growth_keywords)]
         clusters.append({
-            "icon": "◆", "theme": "Growth & Customer Intelligence",
+            "icon": "◆",
+            "theme": "Growth & Customer Intelligence",
+            "signals": max(2, len(obj_matches) + 1),
+            "summary": (
+                f"{company} is prioritising revenue expansion and customer experience improvement. "
+                f"Growth is the dominant commercial driver this year, with {len(growth_areas)} growth "
+                f"priorities identified."
+            ),
+            "ai_potential": "AI-powered customer segmentation and automated personalised engagement across the funnel"
+        })
+
+    # Cluster 2 — Operational / tech signals
+    ops_keywords = ["efficiency", "operational", "automat", "manual", "data", "infrastructure", "velocity", "platform", "integration", "pipeline", "process"]
+    if any(k in obj_text or k in growth_text or k in challenges.lower() for k in ops_keywords):
+        clusters.append({
+            "icon": "◈",
+            "theme": "Operational & Technical Efficiency",
+            "signals": max(2, len([o for o in objectives if any(k in o.lower() for k in ops_keywords)])),
+            "summary": (
+                f"Manual processes and data silos are limiting {company}'s productivity. "
+                f"The team is spending significant time on work that AI tools can automate — "
+                f"particularly in the areas highlighted in the challenges described."
+            ),
+            "ai_potential": "Intelligent workflow automation with AI-generated dashboards and anomaly alerting"
+        })
+
+    # Cluster 3 — Risk / compliance signals
+    risk_keywords = ["risk", "compliance", "security", "governance", "legal", "regulation"]
+    if any(k in obj_text or k in growth_text for k in risk_keywords):
+        clusters.append({
+            "icon": "▣",
+            "theme": "Risk & Governance",
             "signals": 2,
-            "summary": f"{company} is prioritising revenue expansion and customer experience. Growth is the dominant strategic driver.",
-            "ai_potential": "AI-powered customer segmentation and personalised engagement automation"
+            "summary": (
+                f"{company} has identified compliance and risk management as strategic priorities. "
+                f"AI can reduce manual audit work and flag issues before they escalate."
+            ),
+            "ai_potential": "Automated compliance monitoring, contract review AI, and real-time risk alerting"
         })
-    if any(o in objectives for o in ['efficiency', 'talent', 'data']):
+
+    # Cluster 4 — Talent / people signals
+    people_keywords = ["talent", "people", "hr", "team", "workforce", "hiring", "productivity"]
+    if any(k in obj_text or k in growth_text for k in people_keywords):
         clusters.append({
-            "icon": "◈", "theme": "Operational Efficiency",
-            "signals": 3,
-            "summary": "Manual processes and data silos are limiting productivity. Teams are spending time on work that AI can automate.",
-            "ai_potential": "Intelligent workflow automation with real-time performance dashboards"
+            "icon": "◉",
+            "theme": "Talent & Workforce Productivity",
+            "signals": 2,
+            "summary": (
+                f"People productivity and talent development are strategic priorities for {company}. "
+                f"AI can reduce administrative overhead and free teams for higher-value work."
+            ),
+            "ai_potential": "AI-assisted onboarding, performance insight dashboards, and automated HR reporting"
         })
+
+    # Default if nothing matched
     if not clusters:
         clusters.append({
-            "icon": "◎", "theme": "Strategic AI Readiness",
-            "signals": 1,
-            "summary": f"{company} is beginning to map where AI can create most value. This workshop will build that clarity.",
-            "ai_potential": "Targeted AI pilots in highest-friction workflows identified today"
+            "icon": "◎",
+            "theme": "Strategic AI Readiness",
+            "signals": len(objectives) + len(growth_areas),
+            "summary": (
+                f"{company} is mapping where AI can create the most value across its operations. "
+                f"This workshop will prioritise the highest-impact, lowest-effort opportunities first."
+            ),
+            "ai_potential": "Targeted AI pilots in the highest-friction workflows identified today"
         })
-    return {
-        "dominant_theme": f"{company} is focused on {objectives[0] if objectives else 'operational improvement'} as its primary strategic driver.",
-        "clusters": clusters
-    }
+
+    # Build a readable dominant theme from actual objective labels
+    top_objectives = objectives[:2] if objectives else ["operational improvement"]
+    dominant = (
+        f"{company} is primarily focused on {' and '.join(top_objectives).lower()}, "
+        f"with {len(growth_areas)} growth priorities driving the agenda this year."
+    )
+
+    return {"dominant_theme": dominant, "clusters": clusters}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Phase 3 — Problem Clustering
 # ─────────────────────────────────────────────────────────────────────────────
-def cluster_problems(company: str, industry: str, problems: list) -> list:
+def cluster_problems(company: str, industry: str, problems: list,
+                       session: dict = None) -> list:
     """
     Takes a list of submitted problems and clusters them into strategic themes.
     Detects cross-department patterns and assigns AI opportunities.
-
-    problems: list of dicts with keys: text, tags, severity, department
+    Merges with seed pain points for richer clustering.
     """
     if not problems:
         return []
+    # Merge participant problems with seeded pain points for richer context
+    seed_problems = []
+    if session and session.get("seed", {}).get("insight_mining", {}).get("known_pain_points"):
+        seed_problems = session["seed"]["insight_mining"]["known_pain_points"][:10]
 
     problems_text = "\n".join([
         f"- [{p.get('department', 'Unknown')}] \"{p['text']}\" "
@@ -143,13 +219,22 @@ Rules:
     clusters    = []
 
     if manual:
+        # Extract workflow steps for fallback
+        wf_steps = []
+        for p in manual:
+            wf = p.get('workflow_description', '').strip()
+            if wf:
+                sentences = [s.strip() for s in wf.replace('then', '.').split('.') if len(s.strip()) > 8]
+                wf_steps.extend(sentences[:2])
         clusters.append({
             "icon": "◈", "theme": "Manual Process Overhead",
             "problem_count": len(manual),
             "summary": "Teams are spending significant time on repetitive manual tasks. This work is directly automatable with AI.",
             "departments": departments[:3], "cross_department": len(departments) > 1,
             "avg_severity": round(avg_sev, 1),
-            "ai_opportunity": "RPA + AI workflow agents to eliminate manual data entry and repetitive processing"
+            "ai_opportunity": "RPA + AI workflow agents to eliminate manual data entry and repetitive processing",
+            "automation_targets": wf_steps[:4] if wf_steps else [],
+            "manual_steps_identified": len(wf_steps),
         })
     if time_cons:
         clusters.append({
@@ -158,7 +243,9 @@ Rules:
             "summary": "Reporting and decision workflows are too slow. Real-time AI analytics would eliminate the lag.",
             "departments": departments[:2], "cross_department": len(departments) > 1,
             "avg_severity": round(min(avg_sev + 0.3, 5.0), 1),
-            "ai_opportunity": "AI reporting pipeline with natural language querying and automated alerts"
+            "ai_opportunity": "AI reporting pipeline with natural language querying and automated alerts",
+            "automation_targets": [],
+            "manual_steps_identified": 0,
         })
     if not clusters:
         clusters.append({
@@ -167,7 +254,9 @@ Rules:
             "summary": f"{company} has identified several high-priority areas for AI automation. These represent the best starting points.",
             "departments": departments, "cross_department": len(departments) > 1,
             "avg_severity": round(avg_sev, 1),
-            "ai_opportunity": "Targeted AI pilots in the workflows with the highest severity scores"
+            "ai_opportunity": "Targeted AI pilots in the workflows with the highest severity scores",
+            "automation_targets": [],
+            "manual_steps_identified": 0,
         })
     return clusters
 
@@ -180,21 +269,29 @@ def detect_sector_overlap(industry: str, problem_themes: list) -> list:
     Returns which problem themes are commonly seen across the industry.
     Used to add 'sector-validated' signals to use case cards in Phase 4.
     """
-    # TODO: connect to industry benchmark database in Phase 6
-    # For now, return a simple signal map
-    COMMON_BY_INDUSTRY = {
-        "Technology & Software":         ["manual reporting", "lead qualification", "support tickets"],
-        "Financial Services & Banking":  ["document processing", "compliance checks", "customer onboarding"],
-        "Healthcare & Life Sciences":    ["patient data entry", "appointment scheduling", "billing"],
-        "Retail & E-commerce":           ["inventory management", "customer support", "demand forecasting"],
-        "Manufacturing & Supply Chain":  ["quality control", "predictive maintenance", "inventory"],
-        "Professional Services":         ["time tracking", "proposal generation", "client reporting"],
-    }
-    common = COMMON_BY_INDUSTRY.get(industry, [])
+    benchmarks = get_industry_benchmarks(industry)
+    benchmark_terms = []
+    for use_case in benchmarks.get("top_use_cases", []):
+        title = use_case.get("title", "").strip().lower()
+        description = use_case.get("description", "").strip().lower()
+        if title:
+            benchmark_terms.append(title)
+        if description:
+            benchmark_terms.extend(
+                word for word in description.replace("&", " ").replace("/", " ").replace("-", " ").split()
+                if len(word) > 4
+            )
+
     validated = []
     for theme in problem_themes:
-        for c in common:
-            if c.lower() in theme.lower():
+        theme_lower = (theme or "").lower()
+        theme_words = {
+            word for word in theme_lower.replace("&", " ").replace("/", " ").replace("-", " ").split()
+            if len(word) > 3
+        }
+        for term in benchmark_terms:
+            term_words = set(term.split())
+            if term in theme_lower or len(theme_words.intersection(term_words)) >= 2:
                 validated.append(theme)
                 break
     return validated
